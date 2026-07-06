@@ -14,8 +14,9 @@ from typing import Any, Protocol
 
 import httpx
 
+from config import load_local_env
 from .models import Candle, Financials, NewsItem, Quote, utc_now_iso
-from .symbols import normalize_symbol
+from .symbols import is_a_share, normalize_symbol, to_akshare_symbol, to_tushare_symbol
 
 
 class MarketDataProvider(Protocol):
@@ -286,6 +287,260 @@ class YahooFinanceProvider:
         return items
 
 
+class TushareProvider:
+    name = "Tushare Pro"
+
+    def __init__(self, token: str | None = None):
+        self.token = token or os.environ.get("TUSHARE_TOKEN", "")
+        self._pro = None
+
+    def available(self) -> bool:
+        return bool(self.token)
+
+    def _client(self) -> Any:
+        if not self.token:
+            raise ProviderError("missing TUSHARE_TOKEN")
+        if self._pro is None:
+            try:
+                import tushare as ts  # type: ignore
+            except ImportError as exc:
+                raise ProviderError("tushare package is not installed") from exc
+            ts.set_token(self.token)
+            self._pro = ts.pro_api(self.token)
+        return self._pro
+
+    def _require_a_share(self, symbol: str) -> tuple[str, str]:
+        normalized = normalize_symbol(symbol)
+        if not is_a_share(normalized):
+            raise ProviderError("TushareProvider supports A-share symbols only")
+        return normalized, to_tushare_symbol(normalized)
+
+    def get_quote(self, symbol: str) -> Quote:
+        normalized, ts_code = self._require_a_share(symbol)
+        pro = self._client()
+        start_date, end_date = _date_window("1mo")
+        daily = pro.daily(ts_code=ts_code, start_date=start_date, end_date=end_date)
+        if daily is None or daily.empty:
+            raise ProviderError("empty Tushare daily quote")
+        daily = daily.sort_values("trade_date")
+        latest = daily.iloc[-1]
+        previous = daily.iloc[-2] if len(daily) > 1 else None
+        basics = self._daily_basic(pro, ts_code)
+        name = self._stock_name(pro, ts_code)
+        price = _to_float(latest.get("close"))
+        previous_close = _to_float(previous.get("close")) if previous is not None else _to_float(latest.get("pre_close"))
+        change = price - previous_close if price is not None and previous_close not in (None, 0) else _to_float(latest.get("change"))
+        change_percent = (
+            change / previous_close * 100
+            if change is not None and previous_close
+            else _to_float(latest.get("pct_chg"))
+        )
+        trade_date = str(latest.get("trade_date", ""))
+        return Quote(
+            symbol=normalized,
+            name=name,
+            currency="CNY",
+            price=price,
+            previous_close=previous_close,
+            change=change,
+            change_percent=change_percent,
+            volume=_to_int(latest.get("vol")),
+            market_cap=_to_float(basics.get("total_mv")) * 10_000 if basics.get("total_mv") is not None else None,
+            pe_ratio=_to_float(basics.get("pe_ttm") or basics.get("pe")),
+            source=self.name,
+            as_of=_format_trade_date(trade_date),
+            is_realtime=False,
+            notes=["Tushare daily data is end-of-day data, not tick-level realtime data."],
+        )
+
+    def get_history(self, symbol: str, period: str = "1y", interval: str = "1d") -> list[Candle]:
+        normalized, ts_code = self._require_a_share(symbol)
+        pro = self._client()
+        start_date, end_date = _date_window(period)
+        data = pro.daily(ts_code=ts_code, start_date=start_date, end_date=end_date)
+        if data is None or data.empty:
+            raise ProviderError("empty Tushare history")
+        data = data.sort_values("trade_date")
+        candles: list[Candle] = []
+        for _, row in data.iterrows():
+            candles.append(Candle(
+                date=_format_trade_date(str(row.get("trade_date", ""))),
+                open=_to_float(row.get("open")),
+                high=_to_float(row.get("high")),
+                low=_to_float(row.get("low")),
+                close=_to_float(row.get("close")),
+                volume=_to_int(row.get("vol")),
+            ))
+        return candles
+
+    def get_financials(self, symbol: str) -> Financials:
+        normalized, ts_code = self._require_a_share(symbol)
+        pro = self._client()
+        basics = self._daily_basic(pro, ts_code)
+        income = self._latest_report(pro, "income", ts_code)
+        cashflow = self._latest_report(pro, "cashflow", ts_code)
+        fina_indicator = self._latest_report(pro, "fina_indicator", ts_code)
+        revenue = _to_float(income.get("total_revenue") or income.get("revenue"))
+        net_income = _to_float(income.get("n_income_attr_p") or income.get("net_profit"))
+        return Financials(
+            symbol=normalized,
+            source=self.name,
+            as_of=utc_now_iso(),
+            market_cap=_to_float(basics.get("total_mv")) * 10_000 if basics.get("total_mv") is not None else None,
+            pe_ratio=_to_float(basics.get("pe_ttm") or basics.get("pe")),
+            eps=_to_float(fina_indicator.get("eps")),
+            revenue=revenue,
+            gross_profit=_to_float(income.get("grossprofit")),
+            net_income=net_income,
+            free_cash_flow=_to_float(cashflow.get("free_cashflow") or cashflow.get("n_cashflow_act")),
+            debt_to_equity=_to_float(fina_indicator.get("debt_to_assets")),
+            return_on_equity=_to_float(fina_indicator.get("roe")),
+            profit_margin=(net_income / revenue if net_income is not None and revenue else None),
+            notes=["Tushare fundamentals depend on token permission and reporting availability."],
+        )
+
+    def get_news(self, symbol: str, limit: int = 5) -> list[NewsItem]:
+        raise ProviderError("Tushare news is not enabled in this provider")
+
+    def _daily_basic(self, pro: Any, ts_code: str) -> dict[str, Any]:
+        try:
+            start_date, end_date = _date_window("1mo")
+            data = pro.daily_basic(ts_code=ts_code, start_date=start_date, end_date=end_date)
+            if data is not None and not data.empty:
+                return data.sort_values("trade_date").iloc[-1].to_dict()
+        except Exception:
+            return {}
+        return {}
+
+    def _stock_name(self, pro: Any, ts_code: str) -> str:
+        try:
+            data = pro.stock_basic(fields="ts_code,name")
+            if data is not None and not data.empty:
+                row = data.loc[data["ts_code"].astype(str) == ts_code]
+                if not row.empty:
+                    return str(row.iloc[0].get("name", ""))
+        except Exception:
+            return ""
+        return ""
+
+    def _latest_report(self, pro: Any, method: str, ts_code: str) -> dict[str, Any]:
+        try:
+            fn = getattr(pro, method)
+            data = fn(ts_code=ts_code)
+            if data is not None and not data.empty:
+                sort_column = "end_date" if "end_date" in data.columns else data.columns[0]
+                return data.sort_values(sort_column).iloc[-1].to_dict()
+        except Exception:
+            return {}
+        return {}
+
+
+class AKShareProvider:
+    name = "AKShare"
+
+    def __init__(self):
+        self._ak = None
+
+    def _client(self) -> Any:
+        if self._ak is None:
+            try:
+                import akshare as ak  # type: ignore
+            except ImportError as exc:
+                raise ProviderError("akshare package is not installed") from exc
+            self._ak = ak
+        return self._ak
+
+    def _require_a_share(self, symbol: str) -> tuple[str, str]:
+        normalized = normalize_symbol(symbol)
+        if not is_a_share(normalized):
+            raise ProviderError("AKShareProvider supports A-share symbols only")
+        return normalized, to_akshare_symbol(normalized)
+
+    def get_quote(self, symbol: str) -> Quote:
+        normalized, code = self._require_a_share(symbol)
+        ak = self._client()
+        data = ak.stock_zh_a_spot_em()
+        if data is None or data.empty:
+            raise ProviderError("empty AKShare spot data")
+        row = data.loc[data["代码"].astype(str) == code]
+        if row.empty:
+            raise ProviderError(f"{code} not found in AKShare spot data")
+        item = row.iloc[0].to_dict()
+        return Quote(
+            symbol=normalized,
+            name=str(item.get("名称", "")),
+            currency="CNY",
+            price=_to_float(item.get("最新价")),
+            previous_close=None,
+            change=_to_float(item.get("涨跌额")),
+            change_percent=_to_float(item.get("涨跌幅")),
+            volume=_to_int(item.get("成交量")),
+            market_cap=_to_float(item.get("总市值")),
+            pe_ratio=_to_float(item.get("市盈率-动态") or item.get("市盈率")),
+            source=self.name,
+            as_of=utc_now_iso(),
+            is_realtime=True,
+            notes=["AKShare realtime fields depend on upstream Eastmoney availability and may be delayed."],
+        )
+
+    def get_history(self, symbol: str, period: str = "1y", interval: str = "1d") -> list[Candle]:
+        normalized, code = self._require_a_share(symbol)
+        ak = self._client()
+        start_date, end_date = _date_window(period)
+        data = ak.stock_zh_a_hist(
+            symbol=code,
+            period="daily",
+            start_date=start_date,
+            end_date=end_date,
+            adjust="qfq",
+        )
+        if data is None or data.empty:
+            raise ProviderError("empty AKShare history")
+        candles: list[Candle] = []
+        for _, row in data.iterrows():
+            candles.append(Candle(
+                date=str(row.get("日期", "")),
+                open=_to_float(row.get("开盘")),
+                high=_to_float(row.get("最高")),
+                low=_to_float(row.get("最低")),
+                close=_to_float(row.get("收盘")),
+                volume=_to_int(row.get("成交量")),
+            ))
+        return candles
+
+    def get_financials(self, symbol: str) -> Financials:
+        normalized, code = self._require_a_share(symbol)
+        quote = self.get_quote(normalized)
+        notes = ["AKShare financial provider currently uses spot valuation fields; detailed statements are future work."]
+        return Financials(
+            symbol=normalized,
+            source=self.name,
+            as_of=utc_now_iso(),
+            market_cap=quote.market_cap,
+            pe_ratio=quote.pe_ratio,
+            notes=notes,
+        )
+
+    def get_news(self, symbol: str, limit: int = 5) -> list[NewsItem]:
+        normalized, code = self._require_a_share(symbol)
+        ak = self._client()
+        if not hasattr(ak, "stock_news_em"):
+            raise ProviderError("AKShare stock_news_em is unavailable")
+        data = ak.stock_news_em(symbol=code)
+        if data is None or data.empty:
+            raise ProviderError("empty AKShare news")
+        items: list[NewsItem] = []
+        for _, row in data.head(limit).iterrows():
+            items.append(NewsItem(
+                title=str(row.get("新闻标题") or row.get("标题") or ""),
+                publisher=str(row.get("文章来源") or row.get("来源") or "Eastmoney"),
+                link=str(row.get("新闻链接") or row.get("链接") or ""),
+                published_at=str(row.get("发布时间") or row.get("时间") or ""),
+                source=self.name,
+            ))
+        return items
+
+
 class SampleDataProvider:
     name = "SAMPLE_FALLBACK"
 
@@ -390,11 +645,15 @@ class SampleDataProvider:
 
 class ProviderChain:
     def __init__(self, providers: list[MarketDataProvider] | None = None):
+        load_local_env()
         default: list[MarketDataProvider] = []
         alpha = AlphaVantageProvider()
+        tushare = TushareProvider()
         if alpha.available():
             default.append(alpha)
-        default.extend([YahooFinanceProvider(), SampleDataProvider()])
+        if tushare.available():
+            default.append(tushare)
+        default.extend([AKShareProvider(), YahooFinanceProvider(), SampleDataProvider()])
         self.providers = providers or default
 
     def get_quote(self, symbol: str) -> Quote:
@@ -486,6 +745,19 @@ def _period_to_days(period: str) -> int:
 def _trim_period(candles: list[Candle], period: str) -> list[Candle]:
     days = _period_to_days(period)
     return candles[-days:]
+
+
+def _date_window(period: str) -> tuple[str, str]:
+    end = datetime.utcnow().date()
+    start = end - timedelta(days=_period_to_days(period) * 7 // 5 + 10)
+    return start.strftime("%Y%m%d"), end.strftime("%Y%m%d")
+
+
+def _format_trade_date(value: str) -> str:
+    text = value.strip()
+    if len(text) == 8 and text.isdigit():
+        return f"{text[:4]}-{text[4:6]}-{text[6:]}"
+    return text
 
 
 def _generic_profile(symbol: str) -> dict[str, Any]:

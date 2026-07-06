@@ -19,6 +19,8 @@ from typing import Any
 
 import httpx
 
+from config import load_local_env
+
 
 class DeepSeekBackend:
     def __init__(self,
@@ -26,8 +28,9 @@ class DeepSeekBackend:
                  base_url: str | None = None,
                  model: str | None = None,
                  timeout: float = 60.0):
+        load_local_env()
         self.api_key = api_key or os.environ.get("DEEPSEEK_API_KEY", "")
-        self.base_url = (base_url or os.environ.get("DEEPSEEK_BASE_URL", "https://api.deepseek.com")).rstrip("/")
+        self.base_url = _normalize_base_url(base_url or os.environ.get("DEEPSEEK_BASE_URL", "https://api.deepseek.com"))
         self.model = model or os.environ.get("DEEPSEEK_MODEL", "deepseek-chat")
         if not self.api_key:
             raise RuntimeError("缺少 DEEPSEEK_API_KEY 环境变量")
@@ -91,3 +94,10 @@ class DeepSeekBackend:
                 args = {}
             tool_calls.append({"id": tc.get("id"), "name": fn.get("name"), "arguments": args})
         return {"role": "assistant", "content": msg.get("content") or "", "tool_calls": tool_calls}
+
+
+def _normalize_base_url(base_url: str) -> str:
+    base = base_url.rstrip("/")
+    if base.endswith("/v1"):
+        return base[:-3]
+    return base

@@ -15,7 +15,7 @@
 1. 数据层
    - 统一股票代码规范化。
    - 支持实时/准实时行情、历史 K 线、基本面、新闻。
-   - 数据 Provider 可替换，先实现 Alpha Vantage/Yahoo Finance/样例 fallback。
+   - 数据 Provider 可替换，先实现 Alpha Vantage/Tushare/AKShare/Yahoo Finance/样例 fallback。
 
 2. 分析层
    - 技术指标：MA5、MA20、MA60、RSI、MACD、波动率、1 月/3 月/1 年收益率。
@@ -43,6 +43,10 @@
    - 支持从自然语言提取常见窗口参数。
    - 输出收益率、最大回撤、夏普、交易次数、胜率。
 
+6. 自进化能力
+   - 从成功任务轨迹、复盘记录和工具调用日志中提炼新的 Skill。
+   - 自动脱敏密钥，默认写入项目内 `skills/` 目录。
+
 ## 进度记录
 
 ### 2026-07-06
@@ -56,10 +60,14 @@
 - [x] 增加金融 Skill。
 - [x] 补充 README 和演示命令。
 - [x] 运行自检并提交推送。
+- [x] 接入本地 `.env.local` 配置读取，避免把 key 推到仓库。
+- [x] 兼容带 `/v1` 的 OpenAI-compatible base URL。
+- [x] 接入 Tushare/AKShare 可选 A 股数据 Provider。
+- [x] 增加 `trace2skill` Skill 和 `trace2skill_generate` 工具。
 
 ## 已实现功能
 
-- 数据层：`ProviderChain`，支持 Alpha Vantage、Yahoo Finance public endpoints 和样例 fallback。
+- 数据层：`ProviderChain`，支持 Alpha Vantage、Tushare、AKShare、Yahoo Finance public endpoints 和样例 fallback。
 - 行情：`finance_get_quote`。
 - 历史价格：`finance_get_price_history`，支持摘要和 CSV。
 - 基本面：`finance_get_financials`。
@@ -72,6 +80,7 @@
 - 自选股简报：`finance_daily_brief`。
 - 离线路由：未配置真模型时，`FakeBackend` 会用 `finance_route_task` 跑通金融 Demo。
 - Skill：`skills/finance-stock/SKILL.md` 规定金融分析边界和流程。
+- Trace2Skill：`skills/trace2skill/SKILL.md` 和 `trace2skill_generate` 支持从成功轨迹生成新 Skill。
 
 ## 使用说明
 
@@ -89,12 +98,16 @@ python -m agent.cli "生成我的自选股每日简报：AAPL, MSFT, NVDA"
 ```bash
 export DEEPSEEK_API_KEY="..."
 export ALPHAVANTAGE_API_KEY="..."
+export TUSHARE_TOKEN="..."
 ```
+
+也可以复制 `.env.example` 到 `.env.local`。`.env.local` 已被 git 忽略，不会提交。
 
 ## 已知限制
 
 - 数据源的实时性取决于 API 供应商、市场和网络环境。
 - 免费数据源可能限流、延迟或缺失部分基本面字段。
+- Tushare 需要 token 和对应接口权限；AKShare 依赖上游公开页面结构，可能随页面变化失效。
 - 回测不包含滑点、手续费、分红复权和真实成交约束，第一版只用于研究。
 
 ## 验证记录
@@ -117,3 +130,10 @@ python -m agent.cli "生成我的自选股每日简报：AAPL, MSFT, NVDA"
 - 未配置 `DEEPSEEK_API_KEY` 时，FakeBackend 可把金融任务路由到 `finance_route_task` 并返回完整报告。
 - Yahoo 行情时间戳超过 36 小时时会标注为非实时/延迟数据。
 - 基本面降级到 `SAMPLE_FALLBACK` 时，报告和辩论裁判都会降低数据置信度。
+
+追加验证：
+- `.env.local` 被 `.gitignore` 忽略，未进入 git status。
+- `DEEPSEEK_BASE_URL=https://api.penguinsaichat.dpdns.org/v1` 会规范化为不重复拼接 `/v1`。
+- 本地验证 `/v1/models` 可访问，`DEEPSEEK_MODEL=gpt-5.5-openai-compact` 可返回 `OK`。
+- 未安装 `tushare/akshare` 时 Provider 链保持可运行，并自动回退到后续数据源。
+- `trace2skill_generate` 可创建新 Skill，并脱敏 `sk-...` 风格密钥。

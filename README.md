@@ -13,6 +13,8 @@
 - 多智能体辩论：多头、空头、价值、宏观、风险、裁判
 - 策略辅助：移动均线交叉策略回测
 - 自选股简报：批量生成每日跟踪摘要
+- 数据源扩展：Alpha Vantage、Tushare、AKShare、Yahoo Finance，并带样例 fallback
+- Trace2Skill 自进化：把成功任务轨迹沉淀成新的项目 Skill
 
 ## 快速演示
 
@@ -29,14 +31,33 @@ python -m agent.cli "生成我的自选股每日简报：AAPL, MSFT, NVDA"
 
 没有配置 `DEEPSEEK_API_KEY` 时，`FakeBackend` 会把金融任务路由到 `finance_route_task`，仍然可以跑通 Demo。配置真模型后，Agent 会自动使用 DeepSeek API 选择工具和组织答案。
 
-可选真实数据源：
+可选本地配置：
 
 ```bash
-export ALPHAVANTAGE_API_KEY="你的 Alpha Vantage key"
-export DEEPSEEK_API_KEY="你的 DeepSeek key"
+cp .env.example .env.local
+# 在 .env.local 中填写，不要提交：
+# DEEPSEEK_API_KEY=...
+# DEEPSEEK_BASE_URL=https://api.penguinsaichat.dpdns.org/v1
+# DEEPSEEK_MODEL=gpt-5.5-openai-compact
+# TUSHARE_TOKEN=...
 ```
 
+`.env.local` 已被 `.gitignore` 忽略。不要把 API key、token、cookie 写进代码或文档。
+
 如果公开数据源被限流，系统会降级到明确标注的 `SAMPLE_FALLBACK` 样例数据。样例数据只用于离线演示，不能用于真实投资判断。
+
+Trace2Skill 示例：
+
+```bash
+python - <<'PY'
+from trace2skill import generate_skill
+generate_skill(
+    task="把成功的金融分析流程沉淀成 Skill",
+    trace="读取数据源 -> 生成报告 -> 运行 selfcheck 验证 -> 注意不要提交密钥",
+    skill_name="finance-report-workflow",
+)
+PY
+```
 
 ## 项目进度文档
 

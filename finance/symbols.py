@@ -43,6 +43,23 @@ def normalize_symbol(symbol: str) -> str:
     return normalized
 
 
+def is_a_share(symbol: str) -> bool:
+    normalized = normalize_symbol(symbol)
+    return bool(re.fullmatch(r"\d{6}\.(SS|SZ|SH|BJ)", normalized))
+
+
+def to_tushare_symbol(symbol: str) -> str:
+    normalized = normalize_symbol(symbol)
+    if normalized.endswith(".SS"):
+        return normalized[:-3] + ".SH"
+    return normalized
+
+
+def to_akshare_symbol(symbol: str) -> str:
+    normalized = normalize_symbol(symbol)
+    return normalized.split(".", 1)[0]
+
+
 def extract_symbols(text: str) -> list[str]:
     found: list[str] = []
     lowered = text.lower()

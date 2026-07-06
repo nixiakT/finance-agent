@@ -60,8 +60,9 @@ def build_default_registry() -> ToolRegistry:
     """组装内置工具。随课程推进逐步取消注释。"""
     reg = ToolRegistry()
     from .finance_tools import finance_tools
+    from .trace2skill_tools import trace2skill_tools
 
-    for tool in finance_tools:
+    for tool in [*finance_tools, *trace2skill_tools]:
         reg.register(tool)
 
     # TODO[Day5] 取消注释并实现：
