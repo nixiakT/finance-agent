@@ -25,6 +25,8 @@ python -m agent.cli
 # 进入后可以持续对话：
 # finance-agent > /help
 # finance-agent > 分析一下 AAPL 最近三个月走势
+# finance-agent > /think on
+# finance-agent > /quote AAPL
 # finance-agent > /exit
 
 python -m agent.cli /help       # 也可以单次查看帮助
@@ -37,6 +39,26 @@ python -m agent.cli "生成我的自选股每日简报：AAPL, MSFT, NVDA"
 ```
 
 `python -m agent.cli` 会显示招财猫欢迎页并进入持续对话。会话内支持 `/help`、`/clear`、`/selfcheck` 和 `/exit`。`/help` 会列出行情、报告、辩论、回测、自选股简报和 Trace2Skill 等功能。
+
+常用 slash commands：
+
+```text
+/think on | /think off       开关高层执行轨迹
+/quote AAPL                  查询行情
+/history AAPL 1y             历史价格和指标摘要
+/financials AAPL             基本面摘要
+/news AAPL 5                 新闻
+/indicators AAPL 1y          技术指标
+/report AAPL 1y              研究报告
+/compare NVDA AMD 1y         股票对比
+/debate NVDA AMD 1y          多智能体辩论
+/backtest TSLA 20 60 2y      均线策略回测
+/brief AAPL MSFT NVDA        自选股简报
+/tools                       查看工具
+/sources                     查看数据源优先级
+```
+
+`/think on` 显示的是高层执行轨迹，包括模型回合、工具名、参数和结果摘要，不输出模型隐藏推理链。
 
 没有配置 `DEEPSEEK_API_KEY` 时，`FakeBackend` 会把金融任务路由到 `finance_route_task`，仍然可以跑通 Demo。配置真模型后，Agent 会自动使用 DeepSeek API 选择工具和组织答案。
 

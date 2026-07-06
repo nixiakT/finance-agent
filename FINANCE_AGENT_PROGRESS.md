@@ -66,6 +66,8 @@
 - [x] 增加 `trace2skill` Skill 和 `trace2skill_generate` 工具。
 - [x] 优化 CLI：无参数启动显示招财猫欢迎页，`/help` 显示功能菜单。
 - [x] 优化 CLI：无参数启动进入持续交互会话，支持 `/help`、`/clear`、`/selfcheck`、`/exit`。
+- [x] 增加 slash commands：`/quote`、`/history`、`/financials`、`/news`、`/indicators`、`/report`、`/compare`、`/debate`、`/backtest`、`/brief`、`/tools`、`/sources`。
+- [x] 增加 `/think on|off`，展示高层执行轨迹、工具调用和结果摘要。
 
 ## 已实现功能
 
@@ -86,6 +88,8 @@
 - CLI 欢迎页：`python -m agent.cli` 显示招财猫入口。
 - CLI 帮助菜单：`python -m agent.cli /help` 显示功能列表和示例命令。
 - CLI 交互模式：`python -m agent.cli` 后可在同一进程中持续提问，复用会话上下文。
+- CLI 命令模式：常用金融工具有对应 slash command，可绕过自然语言路由直接执行。
+- CLI 高层 trace：`/think on` 展示模型回合、工具调用和结果摘要，不输出隐藏推理链。
 
 ## 使用说明
 

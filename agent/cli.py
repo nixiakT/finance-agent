@@ -10,7 +10,7 @@ import sys
 
 from tools.base import build_default_registry
 from agent.prompts import SYSTEM_PROMPT
-from agent.ui import render_help, render_prompt, render_welcome
+from agent.ui import render_help, render_prompt, render_trace, render_welcome
 
 
 def build_system_prompt() -> str:
@@ -58,7 +58,7 @@ def welcome() -> int:
     return 0
 
 
-def build_agent():
+def build_agent(observer=None):
     from agent.loop import AgentLoop
 
     reg = build_default_registry()
@@ -69,16 +69,43 @@ def build_agent():
         from backend.fake_backend import FakeBackend
         print(f"[提示] 未启用真后端（{e}），回退 FakeBackend。配置 DEEPSEEK_API_KEY 后即用真模型。")
         backend = FakeBackend()
-    return AgentLoop(backend, reg, build_system_prompt())
+    return AgentLoop(backend, reg, build_system_prompt(), observer=observer)
+
+
+def make_observer(enabled):
+    def observe(event, payload):
+        if not enabled():
+            return
+        if event == "model_start":
+            print(render_trace("model", f"turn {payload.get('turn')}"))
+        elif event == "model_end":
+            calls = payload.get("tool_calls") or []
+            if calls:
+                print(render_trace("model selected tools", ", ".join(calls)))
+            elif payload.get("content_preview"):
+                print(render_trace("model answered", payload["content_preview"]))
+        elif event == "tool_start":
+            print(render_trace("tool", f"{payload.get('name')} {payload.get('arguments')}"))
+        elif event == "tool_end":
+            print(render_trace("tool result", f"{payload.get('name')} -> {payload.get('preview')}"))
+        elif event == "tool_error":
+            print(render_trace("tool error", f"{payload.get('name')} -> {payload.get('error')}"))
+    return observe
 
 
 def interactive() -> int:
+    from agent.commands import CommandRouter
     from agent.loop import AgentSession
 
     print(render_welcome())
     print()
-    agent = build_agent()
+    think_enabled = False
+    agent = build_agent(observer=make_observer(lambda: think_enabled))
     session = AgentSession(agent)
+    router = CommandRouter(
+        agent.registry,
+        trace=lambda event, detail: print(render_trace(event, detail)) if think_enabled else None,
+    )
     while True:
         try:
             user_input = input(render_prompt())
@@ -89,18 +116,29 @@ def interactive() -> int:
         if not task:
             continue
         command = task.lower()
-        if command in {"/exit", "/quit", "exit", "quit"}:
-            print("bye.")
-            return 0
         if command in {"/help", "help"}:
             print(render_help())
             continue
-        if command in {"/clear", "clear"}:
-            session.reset()
-            print("已清空当前会话上下文。")
-            continue
-        if command in {"/selfcheck", "selfcheck"}:
-            selfcheck()
+        if task.startswith("/"):
+            result = router.handle(task, think_enabled=think_enabled)
+            if result.handled:
+                if result.think is not None:
+                    think_enabled = result.think
+                if result.clear:
+                    session.reset()
+                if result.selfcheck:
+                    selfcheck()
+                if result.output:
+                    print(result.output)
+                if result.exit:
+                    print("bye.")
+                    return 0
+                continue
+        if command in {"exit", "quit"}:
+            print("bye.")
+            return 0
+        if command == "help":
+            print(render_help())
             continue
         print(session.ask(task))
 

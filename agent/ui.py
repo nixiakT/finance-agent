@@ -24,6 +24,8 @@ finance-agent 功能菜单
 基础命令：
   /help
     显示当前功能菜单。
+  /think on | /think off
+    开关高层执行轨迹。显示模型是否调用工具、工具名、参数和结果摘要。
   /selfcheck 或 --selfcheck
     运行工具注册、后端和主循环自检。
   /clear
@@ -34,6 +36,32 @@ finance-agent 功能菜单
 股票研究：
   分析一下 AAPL 最近三个月走势，并生成投资研究摘要
   分析一下 贵州茅台 的基本面和技术面
+
+一键命令：
+  /quote AAPL
+    查询行情。
+  /history AAPL 1y
+    查看历史价格和技术指标摘要。
+  /financials AAPL
+    查看基本面和估值摘要。
+  /news AAPL 5
+    查看相关新闻。
+  /indicators AAPL 1y
+    计算技术指标。
+  /report AAPL 1y
+    生成结构化股票研究报告。
+  /compare NVDA AMD 1y
+    对比多只股票。
+  /debate NVDA AMD 1y
+    多智能体辩论选股。
+  /backtest TSLA 20 60 2y
+    回测 20/60 日均线策略。
+  /brief AAPL MSFT NVDA
+    生成自选股简报。
+  /tools
+    列出已注册工具。
+  /sources
+    查看当前数据源优先级。
 
 行情与数据：
   - 实时/准实时行情：价格、涨跌幅、成交量、市值等
@@ -104,6 +132,13 @@ def render_prompt() -> str:
     if not sys.stdin.isatty():
         return ""
     return _color("finance-agent", "green") + _color(" > ", "muted")
+
+
+def render_trace(event: str, detail: str = "") -> str:
+    prefix = _color("thinking", "muted")
+    if detail:
+        return f"{prefix} · {event}: {detail}"
+    return f"{prefix} · {event}"
 
 
 def _box_line(text: str) -> str:
