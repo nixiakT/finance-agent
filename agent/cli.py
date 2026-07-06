@@ -12,12 +12,25 @@ from tools.base import build_default_registry
 from agent.prompts import SYSTEM_PROMPT
 
 
+def build_system_prompt() -> str:
+    try:
+        from skills.loader import load_skills, skills_catalog
+
+        skills = load_skills()
+        if not skills:
+            return SYSTEM_PROMPT
+        return SYSTEM_PROMPT + "\n\n可用 Skills：\n" + skills_catalog(skills)
+    except Exception as exc:  # noqa: BLE001
+        return SYSTEM_PROMPT + f"\n\n[Skill 加载失败：{exc}]"
+
+
 def selfcheck() -> int:
     print("== mini-OpenClaw 自检 ==")
     ok = True
     try:
         reg = build_default_registry()
         print(f"[ok] 工具注册表加载成功，当前内置工具数：{len(reg)}（Day5 起会变多）")
+        print(f"     工具：{', '.join(reg.names())}")
     except Exception as e:  # noqa
         print(f"[FAIL] 工具注册表：{e}"); ok = False
 
@@ -58,7 +71,7 @@ def main(argv: list[str] | None = None) -> int:
         from backend.fake_backend import FakeBackend
         print(f"[提示] 未启用真后端（{e}），回退 FakeBackend。配置 DEEPSEEK_API_KEY 后即用真模型。")
         backend = FakeBackend()
-    agent = AgentLoop(backend, reg, SYSTEM_PROMPT)
+    agent = AgentLoop(backend, reg, build_system_prompt())
     print(agent.run(args.task))
     return 0
 

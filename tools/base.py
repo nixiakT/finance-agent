@@ -59,6 +59,11 @@ class ToolRegistry:
 def build_default_registry() -> ToolRegistry:
     """组装内置工具。随课程推进逐步取消注释。"""
     reg = ToolRegistry()
+    from .finance_tools import finance_tools
+
+    for tool in finance_tools:
+        reg.register(tool)
+
     # TODO[Day5] 取消注释并实现：
     # from .fs import read_tool, write_tool
     # from .shell import bash_tool

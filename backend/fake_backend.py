@@ -17,7 +17,18 @@ class FakeBackend:
         last = messages[-1]["content"] if messages else ""
         # 如果上一条是工具结果（observation），就给最终答复
         if messages and messages[-1].get("role") == "tool":
-            return {"role": "assistant", "content": f"[FakeBackend] 已根据工具结果完成：{last[:60]}", "tool_calls": []}
+            return {"role": "assistant", "content": str(last), "tool_calls": []}
+
+        # 金融任务：离线时也走 finance_route_task，方便无模型 API 的 Demo。
+        if tools and any(k in str(last).lower() for k in (
+            "股票", "金融", "行情", "财报", "估值", "回测", "策略", "选股", "辩论",
+            "自选股", "aapl", "nvda", "tsla", "amd", "msft", "贵州茅台",
+        )):
+            return {
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [{"name": "finance_route_task", "arguments": {"task": str(last)}}],
+            }
 
         # 否则，如果有可用工具且用户像是要做事，假装调一个工具
         if tools and any(k in str(last) for k in ("文件", "运行", "file", "run", "hello")):

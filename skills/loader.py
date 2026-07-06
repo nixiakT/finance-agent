@@ -29,8 +29,24 @@ class Skill:
 
 
 def parse_skill_md(text: str, path: Path) -> Skill:
-    # TODO[Day9] 解析 YAML frontmatter（name/description）+ 正文 body
-    raise NotImplementedError("Day9：解析 SKILL.md frontmatter")
+    name = path.parent.name
+    description = ""
+    body = text
+    if text.startswith("---"):
+        parts = text.split("---", 2)
+        if len(parts) == 3:
+            _, frontmatter, body = parts
+            for line in frontmatter.splitlines():
+                if ":" not in line:
+                    continue
+                key, value = line.split(":", 1)
+                key = key.strip()
+                value = value.strip().strip('"').strip("'")
+                if key == "name":
+                    name = value
+                elif key == "description":
+                    description = value
+    return Skill(name=name, description=description, body=body.strip(), path=path)
 
 
 def load_skills(root: str = "skills") -> list[Skill]:

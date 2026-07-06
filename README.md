@@ -1,4 +1,46 @@
-# mini-OpenClaw（学生 starter 仓库）
+# finance-agent（mini-OpenClaw 金融股票研究助手）
+
+> 当前项目已经从通用 starter 扩展为金融股票研究 Agent。它面向股票行情、基本面、新闻、技术指标、多智能体辩论和策略回测，只做研究辅助，不做自动交易。
+
+## 金融 Agent 能力
+
+- 股票行情查询：`finance_get_quote`
+- 历史价格和技术指标：MA5 / MA20 / MA60、RSI、MACD、波动率、近 1 月 / 3 月 / 1 年收益率
+- 基本面研究：市值、PE、EPS、营收、利润、现金流、ROE、利润率等
+- 新闻摘要：获取相关新闻标题、时间、来源和链接
+- 结构化股票研究报告：价格、走势、基本面、技术面、新闻、风险、结论
+- 投资框架蒸馏：巴菲特/芒格、段永平、达利欧
+- 多智能体辩论：多头、空头、价值、宏观、风险、裁判
+- 策略辅助：移动均线交叉策略回测
+- 自选股简报：批量生成每日跟踪摘要
+
+## 快速演示
+
+```bash
+pip install -r requirements.txt
+
+python -m agent.cli --selfcheck
+python -m agent.cli "分析一下 AAPL 最近三个月走势，并生成投资研究摘要"
+python -m agent.cli "比较 NVDA 和 AMD 的基本面和技术面"
+python -m agent.cli "用巴菲特、段永平、达利欧三个视角分析 NVDA，并让多智能体辩论是否值得继续跟踪"
+python -m agent.cli "帮我回测 TSLA 的 20 日均线上穿 60 日均线策略"
+python -m agent.cli "生成我的自选股每日简报：AAPL, MSFT, NVDA"
+```
+
+没有配置 `DEEPSEEK_API_KEY` 时，`FakeBackend` 会把金融任务路由到 `finance_route_task`，仍然可以跑通 Demo。配置真模型后，Agent 会自动使用 DeepSeek API 选择工具和组织答案。
+
+可选真实数据源：
+
+```bash
+export ALPHAVANTAGE_API_KEY="你的 Alpha Vantage key"
+export DEEPSEEK_API_KEY="你的 DeepSeek key"
+```
+
+如果公开数据源被限流，系统会降级到明确标注的 `SAMPLE_FALLBACK` 样例数据。样例数据只用于离线演示，不能用于真实投资判断。
+
+## 项目进度文档
+
+计划、进度、已实现功能和已知限制维护在 [FINANCE_AGENT_PROGRESS.md](FINANCE_AGENT_PROGRESS.md)。
 
 > 你将在这 10 天里，把这个骨架填成一个能在命令行里干活的通用智能体。
 > 每个模块里都有 `# TODO[DayN]` 标记，告诉你哪天该填哪里。

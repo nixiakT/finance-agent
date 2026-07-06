@@ -47,7 +47,10 @@ class AgentLoop:
                     obs = f"错误：未知工具 {call['name']}"
                 else:
                     # TODO[Day7] 加错误恢复（try/except，把异常文本作为 observation，让模型自我修复）
-                    obs = tool.run(**call.get("arguments", {}))
+                    try:
+                        obs = tool.run(**call.get("arguments", {}))
+                    except Exception as exc:  # noqa: BLE001 - surface tool errors to the model/user
+                        obs = f"工具 {call['name']} 执行失败：{exc}"
                 messages.append({"role": "tool", "name": call["name"],
                                  "tool_call_id": call.get("id"), "content": str(obs)})
 
