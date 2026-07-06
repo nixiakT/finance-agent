@@ -9,6 +9,7 @@ import argparse
 import sys
 
 from tools.base import build_default_registry
+from agent.input import InteractiveInput, clean_user_input
 from agent.prompts import SYSTEM_PROMPT
 from agent.ui import render_help, render_prompt, render_trace, render_welcome
 
@@ -106,13 +107,14 @@ def interactive() -> int:
         agent.registry,
         trace=lambda event, detail: print(render_trace(event, detail)) if think_enabled else None,
     )
+    input_reader = InteractiveInput(render_prompt())
     while True:
         try:
-            user_input = input(render_prompt())
+            user_input = input_reader.read()
         except (EOFError, KeyboardInterrupt):
             print("\nbye.")
             return 0
-        task = user_input.strip()
+        task = clean_user_input(user_input)
         if not task:
             continue
         command = task.lower()

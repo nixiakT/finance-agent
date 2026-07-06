@@ -1,6 +1,7 @@
 # --- 核心（Day1 起就需要）---
 httpx>=0.27          # 调 DeepSeek API（backend/client.py）/ web_fetch
 pydantic>=2.0        # 工具 schema 校验
+prompt_toolkit>=3.0  # CLI 行编辑、历史记录、快捷键和命令补全
 pandas>=2.0          # 金融指标与策略回测
 numpy>=1.24          # pandas/指标计算基础依赖
 yfinance>=0.2        # 可选数据源，后续可替换 Provider 使用

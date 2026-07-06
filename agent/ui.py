@@ -33,6 +33,10 @@ finance-agent 功能菜单
   /exit
     退出交互会话。
 
+交互编辑：
+  ↑/↓ 历史记录，←/→ 移动光标，Backspace/Delete 删除。
+  Ctrl+A/E 到行首/行尾，Ctrl+U/K 删除光标前/后的内容。
+
 股票研究：
   分析一下 AAPL 最近三个月走势，并生成投资研究摘要
   分析一下 贵州茅台 的基本面和技术面
@@ -126,7 +130,7 @@ def render_welcome() -> str:
     lines.append(_box_line("只做研究辅助，不做自动交易，不承诺收益"))
     lines.append(_box_line(""))
     lines.append(_box_line(_color("Ask  ", "green") + "  分析一下 AAPL 最近三个月走势"))
-    lines.append(_box_line(_color("Help ", "cyan") + "  /help     " + _color("Exit ", "muted") + "  /exit     " + _color("Clear", "muted") + "  /clear"))
+    lines.append(_box_line(_color("Help ", "cyan") + "  /help     " + _color("Exit ", "muted") + "  /exit     " + _color("History", "muted") + "  ↑/↓"))
     lines.append(_box_line(""))
     lines.append(_color("╰" + "─" * WIDTH + "╯", "gold"))
     return "\n".join(lines)

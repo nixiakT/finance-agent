@@ -73,6 +73,8 @@
 - [x] 增加网页核验能力：`web_search`、`web_fetch` 工具，以及 CLI `/search`、`/fetch` 命令。
 - [x] 收紧未知标的 fallback：未知代码不再生成通用样例财务数据，避免把演示数据误当真实数据。
 - [x] 增加 snapshot 容错：行情、历史、基本面、新闻可独立失败并在报告中明确标注。
+- [x] 修复 CLI 输入体验：接入 `prompt_toolkit`，支持历史记录、光标移动、Backspace/Delete、Ctrl+A/E/U/K 和 slash command 补全。
+- [x] 修复重复提示符污染：自动清理用户误粘贴的 `finance-agent >` 前缀。
 
 ## 已实现功能
 
@@ -95,6 +97,8 @@
 - CLI 交互模式：`python -m agent.cli` 后可在同一进程中持续提问，复用会话上下文。
 - CLI 命令模式：常用金融工具有对应 slash command，可绕过自然语言路由直接执行。
 - CLI 高层 trace：`/think on` 展示模型回合、工具调用和结果摘要，不输出隐藏推理链。
+- CLI 行编辑：支持历史记录、方向键、删除键、常见 Emacs 快捷键和命令补全。
+- CLI 输入清洗：误粘贴 `finance-agent >` 前缀时会自动剥离。
 - 标的核验：自然语言包含“标的/代码/上市”等问题时，先做公开网页搜索，再做行情核验。
 - 网页工具：`web_search` 使用公开搜索结果核验来源，`web_fetch` 抓取指定 URL 并标注 WAF/JS 限制。
 
@@ -128,6 +132,7 @@ export TUSHARE_TOKEN="..."
 - Yahoo Finance 的部分基本面端点可能返回权限/crumb 错误；报告会标注字段缺失，不再用未知标的样例数据填充。
 - Tushare 需要 token 和对应接口权限；AKShare 依赖上游公开页面结构，可能随页面变化失效。
 - 回测不包含滑点、手续费、分红复权和真实成交约束，第一版只用于研究。
+- 若运行环境没有安装 `prompt_toolkit`，CLI 会回退到 `readline/input`，功能取决于终端对 readline 的支持。
 
 ## 验证记录
 
@@ -163,3 +168,8 @@ python -m agent.cli "生成我的自选股每日简报：AAPL, MSFT, NVDA"
 - `/search 智谱 02513 股票` 返回新浪、东方财富、雪球、同花顺、Yahoo 财经等公开页面。
 - `/quote 智谱` 返回 Yahoo Finance public endpoints 的 `2513.HK` 行情，并在备注中说明展示代码为 `02513.HK`。
 - `/fetch https://xueqiu.com/S/02513` 能识别雪球 WAF/JS challenge，不再假装读取完整正文。
+
+CLI 输入修复验证：
+- `clean_user_input("finance-agent > finance-agent > /quote 智谱") -> /quote 智谱`。
+- `InteractiveInput` 在 TTY 中优先使用 `prompt_toolkit`，并维护 `~/.finance_agent_history`。
+- 非 TTY 管道输入仍保持兼容。

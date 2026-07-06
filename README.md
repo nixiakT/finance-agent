@@ -43,6 +43,8 @@ python -m agent.cli "生成我的自选股每日简报：AAPL, MSFT, NVDA"
 
 `python -m agent.cli` 会显示招财猫欢迎页并进入持续对话。会话内支持 `/help`、`/clear`、`/selfcheck` 和 `/exit`。`/help` 会列出行情、报告、辩论、回测、自选股简报和 Trace2Skill 等功能。
 
+交互输入使用 `prompt_toolkit`：支持 ↑/↓ 历史记录、←/→ 光标移动、Backspace/Delete 删除、Ctrl+A/E 跳到行首/行尾、Ctrl+U/K 删除光标前/后的内容。CLI 也会自动清理误粘贴的 `finance-agent >` 提示符前缀，避免把提示符当成问题发给模型。
+
 常用 slash commands：
 
 ```text
