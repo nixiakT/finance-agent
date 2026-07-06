@@ -14,23 +14,23 @@ WIDTH = 82
 
 
 LOGO = [
-    "┌────────── 招财进宝 ──────────┐",
-    "│        /\\_/\\      HK US CN   │",
-    "│       (  o.o )    MA RSI PE  │",
-    "│        >  ^  <    DATA NEWS  │",
-    "│      /|   金   |\\            │",
-    "│     /_|___融___|_\\           │",
-    "│        /   |   \\             │",
-    "│       /____|____\\            │",
-    "├────────── Research ──────────┤",
-    "│ model                        │",
-    "{model_row}",
-    "│                              │",
-    "│ mode                         │",
-    "│ research only                │",
-    "│ no auto trading              │",
-    "│ facts · inference · risk     │",
-    "└──────────────────────────────┘",
+    ("╭──────── 招财进宝符 ────────╮", "red"),
+    ("│  ◌   ◌   金 金 金   ◌   ◌  │", "gold"),
+    ("│        /\\___/\\             │", "white"),
+    ("│      (   ^ ᴗ ^   )         │", "white"),
+    ("│    ╭─╯   三 花   ╰─╮       │", "gold"),
+    ("│    │    招 财 手   │       │", "white"),
+    ("│    │   /|  金  |\\  │       │", "white"),
+    ("│    ╰──/ |  融  | \\─╯       │", "white"),
+    ("│        ◢ 发 财 扇 ◣        │", "red"),
+    ("│      ( paw )   ( paw )     │", "white"),
+    ("│      ── 红色花垫 ──        │", "red"),
+    ("╰────────────────────────────╯", "gold"),
+    ("model", "muted"),
+    ("{model_row}", "muted"),
+    ("research only", "gold"),
+    ("facts · inference · risk", "muted"),
+    ("no auto trading", "red"),
 ]
 
 PANEL_ROWS = [
@@ -210,7 +210,7 @@ def _panel_line(left: str, right: str) -> str:
     return (
         _color("│", "gold")
         + " "
-        + _color(left_text, "gold")
+        + left_text
         + " "
         + right_text
         + _color("│", "gold")
@@ -249,6 +249,8 @@ def _color(text: str, name: str) -> str:
         "green": "\033[38;5;82m",
         "cyan": "\033[38;5;80m",
         "muted": "\033[38;5;245m",
+        "red": "\033[38;5;203m",
+        "white": "\033[38;5;255m",
     }
     reset = "\033[0m"
     return f"{colors.get(name, '')}{text}{reset}"
@@ -285,7 +287,7 @@ def _display_width(text: str) -> int:
 
 
 def _pad_display(text: str, width: int) -> str:
-    return text + " " * max(width - _display_width(text), 0)
+    return text + " " * max(width - _display_width(_strip_ansi(text)), 0)
 
 
 def _truncate_display(text: str, width: int) -> str:
@@ -311,16 +313,9 @@ def _logo_rows() -> list[str]:
     load_local_env()
     model = os.environ.get("DEEPSEEK_MODEL", "model not configured")
     rows = []
-    for row in LOGO:
+    for row, color in LOGO:
         if row == "{model_row}":
-            rows.append(_logo_box_row(model))
+            rows.append(_color(_truncate_display(model, 35), color))
         else:
-            rows.append(row)
+            rows.append(_color(row, color))
     return rows
-
-
-def _logo_box_row(text: str) -> str:
-    content_width = 30
-    content = _truncate_display(text, content_width - 2)
-    content = _pad_display(content, content_width - 2)
-    return "│ " + content + " │"
