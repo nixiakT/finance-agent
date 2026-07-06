@@ -62,6 +62,10 @@ finance-agent 功能菜单
     列出已注册工具。
   /sources
     查看当前数据源优先级。
+  /search 智谱 02513 股票
+    搜索公开网页，用于核验标的、上市状态、公告和新闻来源。
+  /fetch https://xueqiu.com/S/02513
+    抓取指定网页并显示标题、描述、HTTP 状态和摘要；遇到 WAF/JS 会标注。
 
 行情与数据：
   - 实时/准实时行情：价格、涨跌幅、成交量、市值等
@@ -91,6 +95,10 @@ finance-agent 功能菜单
 
 自选股简报：
   生成我的自选股每日简报：AAPL, MSFT, NVDA
+
+网页核验：
+  /search 智谱 02513 股票
+  /fetch https://stock.finance.sina.com.cn/hkstock/quotes/02513.html
 
 Trace2Skill 自进化：
   可把成功任务轨迹沉淀成新的 skills/<name>/SKILL.md。

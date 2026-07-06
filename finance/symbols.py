@@ -22,6 +22,10 @@ CHINESE_SYMBOLS = {
     "腾讯": "0700.HK",
     "阿里巴巴": "BABA",
     "美团": "3690.HK",
+    "智谱": "02513.HK",
+    "智谱ai": "02513.HK",
+    "智谱清言": "02513.HK",
+    "knowledge atlas": "02513.HK",
 }
 
 
@@ -34,11 +38,15 @@ def normalize_symbol(symbol: str) -> str:
         return CHINESE_SYMBOLS[lowered]
 
     normalized = raw.upper().replace("。", ".")
+    hk_match = re.fullmatch(r"(\d{1,5})\.HK", normalized)
+    if hk_match:
+        code = hk_match.group(1)
+        return f"{code.zfill(4)}.HK" if len(code) <= 4 else f"{code}.HK"
     if re.fullmatch(r"\d{6}", normalized):
         if normalized.startswith(("6", "9")):
             return f"{normalized}.SS"
         return f"{normalized}.SZ"
-    if re.fullmatch(r"\d{4,5}", normalized):
+    if re.fullmatch(r"\d{1,5}", normalized):
         return f"{normalized.zfill(4)}.HK"
     return normalized
 
@@ -60,19 +68,39 @@ def to_akshare_symbol(symbol: str) -> str:
     return normalized.split(".", 1)[0]
 
 
+def to_yahoo_symbol(symbol: str) -> str:
+    """Return the Yahoo Finance query symbol for a normalized ticker.
+
+    HK tickers are usually displayed with 4 digits, while some Chinese
+    finance sites display newly listed names with a leading zero as 5 digits
+    (for example Snowball 02513). Yahoo expects 2513.HK for that case.
+    """
+    normalized = normalize_symbol(symbol)
+    if normalized.endswith(".HK"):
+        code = normalized[:-3]
+        if code.isdigit():
+            yahoo_code = (code.lstrip("0") or "0").zfill(4)
+            return f"{yahoo_code}.HK"
+    return normalized
+
+
 def extract_symbols(text: str) -> list[str]:
     found: list[str] = []
     lowered = text.lower()
-    for name, symbol in CHINESE_SYMBOLS.items():
+    for name, symbol in sorted(CHINESE_SYMBOLS.items(), key=lambda item: len(item[0]), reverse=True):
         if name in lowered:
             found.append(symbol)
 
+    for match in re.finditer(r"(?:xueqiu\.com/S/|雪球[:：]?\s*)(\d{4,5})", text, flags=re.IGNORECASE):
+        found.append(normalize_symbol(match.group(1)))
+
+    text_without_urls = re.sub(r"https?://\S+", " ", text)
     pattern = re.compile(r"\b[A-Za-z]{1,6}(?:\.[A-Za-z]{1,4})?\b|\b\d{4,6}(?:\.[A-Za-z]{1,4})?\b")
     ignored = {
         "MA", "MACD", "RSI", "PE", "EPS", "ROE", "ETF", "API", "MVP", "CSV",
-        "HTTP", "URL", "AI", "AGENT", "DAY", "BUY", "SELL",
+        "HTTP", "HTTPS", "URL", "WWW", "COM", "AI", "AGENT", "DAY", "BUY", "SELL",
     }
-    for match in pattern.finditer(text):
+    for match in pattern.finditer(text_without_urls):
         token = match.group(0)
         if token.upper() in ignored:
             continue

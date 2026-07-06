@@ -5,9 +5,10 @@ from .backtest import backtest_moving_average_cross, format_backtest, parse_stra
 from .data import ProviderChain, export_history_csv
 from .debate import debate_stocks
 from .indicators import calculate_indicators, format_indicators
-from .models import StockSnapshot, utc_now_iso
+from .models import Financials, NewsItem, Quote, StockSnapshot, utc_now_iso
 from .report import render_comparison, render_daily_brief, render_stock_report
 from .symbols import extract_symbols, normalize_symbol
+from .web import web_search
 
 
 class FinanceResearchAgent:
@@ -16,10 +17,47 @@ class FinanceResearchAgent:
 
     def snapshot(self, symbol: str, period: str = "1y", news_limit: int = 5) -> StockSnapshot:
         normalized = normalize_symbol(symbol)
-        quote = self.provider.get_quote(normalized)
-        history = self.provider.get_history(normalized, period, "1d")
-        financials = self.provider.get_financials(normalized)
-        news = self.provider.get_news(normalized, news_limit)
+        errors: list[str] = []
+        try:
+            quote = self.provider.get_quote(normalized)
+        except Exception as exc:
+            quote = Quote(
+                symbol=normalized,
+                source="UNAVAILABLE",
+                as_of=utc_now_iso(),
+                is_realtime=False,
+                notes=[f"行情获取失败: {_compact_error(exc)}"],
+            )
+            errors.append(f"行情获取失败: {_compact_error(exc)}")
+
+        try:
+            history = self.provider.get_history(normalized, period, "1d")
+        except Exception as exc:
+            history = []
+            errors.append(f"历史价格获取失败: {_compact_error(exc)}")
+
+        try:
+            financials = self.provider.get_financials(normalized)
+        except Exception as exc:
+            financials = Financials(
+                symbol=normalized,
+                source="UNAVAILABLE",
+                as_of=utc_now_iso(),
+                notes=[f"基本面获取失败: {_compact_error(exc)}"],
+            )
+            errors.append(f"基本面获取失败: {_compact_error(exc)}")
+
+        try:
+            news = self.provider.get_news(normalized, news_limit) if news_limit > 0 else []
+        except Exception as exc:
+            news = [
+                NewsItem(
+                    title=f"新闻获取失败: {_compact_error(exc)}",
+                    source="UNAVAILABLE",
+                    published_at=utc_now_iso(),
+                )
+            ]
+            errors.append(f"新闻获取失败: {_compact_error(exc)}")
 
         if financials.market_cap is None and quote.market_cap is not None:
             financials.market_cap = quote.market_cap
@@ -27,6 +65,8 @@ class FinanceResearchAgent:
             financials.pe_ratio = quote.pe_ratio
         if financials.eps is None and quote.eps is not None:
             financials.eps = quote.eps
+        if errors:
+            _extend_unique(quote.notes, errors)
 
         indicators = calculate_indicators(history)
         return StockSnapshot(
@@ -40,10 +80,10 @@ class FinanceResearchAgent:
         )
 
     def get_quote(self, symbol: str) -> str:
-        snapshot = self.snapshot(symbol, "3mo", 3)
-        quote = snapshot.quote
+        normalized = normalize_symbol(symbol)
+        quote = self.provider.get_quote(normalized)
         return "\n".join([
-            f"标的: {snapshot.symbol} {quote.name}".strip(),
+            f"标的: {normalized} {quote.name}".strip(),
             f"价格: {quote.price} {quote.currency}",
             f"涨跌: {quote.change} ({quote.change_percent}%)",
             f"成交量: {quote.volume}",
@@ -55,7 +95,10 @@ class FinanceResearchAgent:
 
     def get_price_history(self, symbol: str, period: str = "1y", format: str = "summary") -> str:
         normalized = normalize_symbol(symbol)
-        history = self.provider.get_history(normalized, period, "1d")
+        try:
+            history = self.provider.get_history(normalized, period, "1d")
+        except Exception as exc:
+            return f"{normalized}: 历史价格获取失败: {_compact_error(exc)}"
         if format == "csv":
             return export_history_csv(history)
         indicators = calculate_indicators(history)
@@ -72,7 +115,10 @@ class FinanceResearchAgent:
 
     def get_news(self, symbol: str, limit: int = 5) -> str:
         normalized = normalize_symbol(symbol)
-        news = self.provider.get_news(normalized, limit)
+        try:
+            news = self.provider.get_news(normalized, limit)
+        except Exception as exc:
+            return f"{normalized}: 新闻获取失败: {_compact_error(exc)}"
         if not news:
             return f"{normalized}: 暂无新闻数据。"
         lines = [f"{normalized} 新闻:"]
@@ -84,7 +130,10 @@ class FinanceResearchAgent:
 
     def calculate_indicators(self, symbol: str, period: str = "1y") -> str:
         normalized = normalize_symbol(symbol)
-        history = self.provider.get_history(normalized, period, "1d")
+        try:
+            history = self.provider.get_history(normalized, period, "1d")
+        except Exception as exc:
+            return f"{normalized}: 技术指标计算失败，历史价格获取失败: {_compact_error(exc)}"
         return format_indicators(calculate_indicators(history))
 
     def generate_report(self, symbol: str, period: str = "1y") -> str:
@@ -115,7 +164,10 @@ class FinanceResearchAgent:
             slow_window=slow_window,
             initial_cash=initial_cash,
         )
-        history = self.provider.get_history(normalize_symbol(symbol), period, "1d")
+        try:
+            history = self.provider.get_history(normalize_symbol(symbol), period, "1d")
+        except Exception as exc:
+            return f"{normalize_symbol(symbol)}: 回测失败，历史价格获取失败: {_compact_error(exc)}"
         result = backtest_moving_average_cross(history, config)
         return format_backtest(result)
 
@@ -130,6 +182,8 @@ class FinanceResearchAgent:
             symbols = ["AAPL"]
         lowered = task.lower()
         period = _extract_period(task)
+        if any(word in task for word in ("标的", "代码", "上市", "是不是上市", "已经上市")):
+            return self.verify_symbol_task(task, symbols[0])
         if any(word in task for word in ("回测", "策略")) or "backtest" in lowered:
             return self.backtest_strategy(symbols[0], task, period or "2y")
         if any(word in task for word in ("简报", "自选股")) or "brief" in lowered:
@@ -139,6 +193,24 @@ class FinanceResearchAgent:
         if any(word in task for word in ("辩论", "选股", "debate")):
             return self.debate_stocks(symbols, period or "1y")
         return self.generate_report(symbols[0], period or "1y")
+
+    def verify_symbol_task(self, task: str, symbol: str) -> str:
+        normalized = normalize_symbol(symbol)
+        query = _verification_query(task, normalized)
+        parts = [
+            "# 标的核验",
+            "",
+            f"- 识别标的: {normalized}",
+            "",
+            "## 公开网页搜索",
+            web_search(query, 5),
+            "",
+            "## 行情核验",
+            self.get_quote(normalized),
+            "",
+            "说明：网页搜索用于确认上市状态、代码和公开页面；行情数据仍以返回的数据源、时间和备注为准。",
+        ]
+        return "\n".join(parts)
 
 
 def _coerce_symbols(symbols: list[str] | str) -> list[str]:
@@ -164,3 +236,36 @@ def _extract_period(task: str) -> str:
     if any(token in task for token in ("五年", "5年", "过去五年")) or "5y" in lowered:
         return "5y"
     return ""
+
+
+def _compact_error(exc: Exception, limit: int = 220) -> str:
+    text = " ".join(str(exc).split())
+    text = text.replace("For more information check:", "详情:")
+    if len(text) <= limit:
+        return text
+    return text[:limit] + "..."
+
+
+def _verification_query(task: str, symbol: str) -> str:
+    terms: list[str] = []
+    if "智谱" in task:
+        terms.append("智谱")
+    terms.append(symbol)
+    if symbol.endswith(".HK"):
+        code = symbol[:-3]
+        terms.append(code)
+        stripped = code.lstrip("0")
+        if stripped and stripped != code:
+            terms.append(stripped)
+    terms.append("股票")
+    unique: list[str] = []
+    for term in terms:
+        if term and term not in unique:
+            unique.append(term)
+    return " ".join(unique)
+
+
+def _extend_unique(target: list[str], values: list[str]) -> None:
+    for value in values:
+        if value not in target:
+            target.append(value)

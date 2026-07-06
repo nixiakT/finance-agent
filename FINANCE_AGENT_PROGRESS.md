@@ -68,6 +68,11 @@
 - [x] 优化 CLI：无参数启动进入持续交互会话，支持 `/help`、`/clear`、`/selfcheck`、`/exit`。
 - [x] 增加 slash commands：`/quote`、`/history`、`/financials`、`/news`、`/indicators`、`/report`、`/compare`、`/debate`、`/backtest`、`/brief`、`/tools`、`/sources`。
 - [x] 增加 `/think on|off`，展示高层执行轨迹、工具调用和结果摘要。
+- [x] 修复智谱/港股标的识别：`智谱`、`智谱AI`、`02513` 归一为 `02513.HK`。
+- [x] 修复 Yahoo 港股查询格式：展示 `02513.HK`，查询 Yahoo 时转换为 `2513.HK`。
+- [x] 增加网页核验能力：`web_search`、`web_fetch` 工具，以及 CLI `/search`、`/fetch` 命令。
+- [x] 收紧未知标的 fallback：未知代码不再生成通用样例财务数据，避免把演示数据误当真实数据。
+- [x] 增加 snapshot 容错：行情、历史、基本面、新闻可独立失败并在报告中明确标注。
 
 ## 已实现功能
 
@@ -90,6 +95,8 @@
 - CLI 交互模式：`python -m agent.cli` 后可在同一进程中持续提问，复用会话上下文。
 - CLI 命令模式：常用金融工具有对应 slash command，可绕过自然语言路由直接执行。
 - CLI 高层 trace：`/think on` 展示模型回合、工具调用和结果摘要，不输出隐藏推理链。
+- 标的核验：自然语言包含“标的/代码/上市”等问题时，先做公开网页搜索，再做行情核验。
+- 网页工具：`web_search` 使用公开搜索结果核验来源，`web_fetch` 抓取指定 URL 并标注 WAF/JS 限制。
 
 ## 使用说明
 
@@ -118,6 +125,7 @@ export TUSHARE_TOKEN="..."
 
 - 数据源的实时性取决于 API 供应商、市场和网络环境。
 - 免费数据源可能限流、延迟或缺失部分基本面字段。
+- Yahoo Finance 的部分基本面端点可能返回权限/crumb 错误；报告会标注字段缺失，不再用未知标的样例数据填充。
 - Tushare 需要 token 和对应接口权限；AKShare 依赖上游公开页面结构，可能随页面变化失效。
 - 回测不包含滑点、手续费、分红复权和真实成交约束，第一版只用于研究。
 
@@ -148,3 +156,10 @@ python -m agent.cli "生成我的自选股每日简报：AAPL, MSFT, NVDA"
 - 本地验证 `/v1/models` 可访问，`DEEPSEEK_MODEL=gpt-5.5-openai-compact` 可返回 `OK`。
 - 未安装 `tushare/akshare` 时 Provider 链保持可运行，并自动回退到后续数据源。
 - `trace2skill_generate` 可创建新 Skill，并脱敏 `sk-...` 风格密钥。
+
+智谱/港股修复验证：
+- `normalize_symbol("智谱") -> 02513.HK`。
+- `to_yahoo_symbol("02513.HK") -> 2513.HK`。
+- `/search 智谱 02513 股票` 返回新浪、东方财富、雪球、同花顺、Yahoo 财经等公开页面。
+- `/quote 智谱` 返回 Yahoo Finance public endpoints 的 `2513.HK` 行情，并在备注中说明展示代码为 `02513.HK`。
+- `/fetch https://xueqiu.com/S/02513` 能识别雪球 WAF/JS challenge，不再假装读取完整正文。

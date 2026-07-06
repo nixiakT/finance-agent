@@ -8,6 +8,7 @@
 - 历史价格和技术指标：MA5 / MA20 / MA60、RSI、MACD、波动率、近 1 月 / 3 月 / 1 年收益率
 - 基本面研究：市值、PE、EPS、营收、利润、现金流、ROE、利润率等
 - 新闻摘要：获取相关新闻标题、时间、来源和链接
+- 网页核验：搜索公开网页或抓取指定 URL，用于确认标的、上市状态、公告和新闻来源
 - 结构化股票研究报告：价格、走势、基本面、技术面、新闻、风险、结论
 - 投资框架蒸馏：巴菲特/芒格、段永平、达利欧
 - 多智能体辩论：多头、空头、价值、宏观、风险、裁判
@@ -27,6 +28,8 @@ python -m agent.cli
 # finance-agent > 分析一下 AAPL 最近三个月走势
 # finance-agent > /think on
 # finance-agent > /quote AAPL
+# finance-agent > /search 智谱 02513 股票
+# finance-agent > /fetch https://xueqiu.com/S/02513
 # finance-agent > /exit
 
 python -m agent.cli /help       # 也可以单次查看帮助
@@ -54,6 +57,9 @@ python -m agent.cli "生成我的自选股每日简报：AAPL, MSFT, NVDA"
 /debate NVDA AMD 1y          多智能体辩论
 /backtest TSLA 20 60 2y      均线策略回测
 /brief AAPL MSFT NVDA        自选股简报
+/search 智谱 02513 股票       搜索公开网页核验标的
+/fetch https://xueqiu.com/S/02513
+                              抓取指定页面摘要
 /tools                       查看工具
 /sources                     查看数据源优先级
 ```
@@ -76,6 +82,10 @@ cp .env.example .env.local
 `.env.local` 已被 `.gitignore` 忽略。不要把 API key、token、cookie 写进代码或文档。
 
 如果公开数据源被限流，系统会降级到明确标注的 `SAMPLE_FALLBACK` 样例数据。样例数据只用于离线演示，不能用于真实投资判断。
+
+港股代码会区分展示代码和数据源查询代码：例如公开页面常显示 `智谱(02513)`，Yahoo Finance 查询使用 `2513.HK`，Agent 报告里会保留展示代码并在备注中说明查询代码。
+
+如果用户问“这个标的是不是上市了”“代码是不是对”，自然语言路由会先做网页核验，再做行情核验。对于雪球这类可能返回 WAF/JS challenge 的页面，`/fetch` 会明确标注无法读取完整正文。
 
 Trace2Skill 示例：
 

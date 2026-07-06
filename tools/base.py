@@ -61,8 +61,9 @@ def build_default_registry() -> ToolRegistry:
     reg = ToolRegistry()
     from .finance_tools import finance_tools
     from .trace2skill_tools import trace2skill_tools
+    from .web_tools import web_tools
 
-    for tool in [*finance_tools, *trace2skill_tools]:
+    for tool in [*finance_tools, *trace2skill_tools, *web_tools]:
         reg.register(tool)
 
     # TODO[Day5] 取消注释并实现：

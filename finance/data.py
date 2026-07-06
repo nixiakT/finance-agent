@@ -16,7 +16,7 @@ import httpx
 
 from config import load_local_env
 from .models import Candle, Financials, NewsItem, Quote, utc_now_iso
-from .symbols import is_a_share, normalize_symbol, to_akshare_symbol, to_tushare_symbol
+from .symbols import is_a_share, normalize_symbol, to_akshare_symbol, to_tushare_symbol, to_yahoo_symbol
 
 
 class MarketDataProvider(Protocol):
@@ -160,8 +160,9 @@ class YahooFinanceProvider:
 
     def _chart(self, symbol: str, period: str, interval: str) -> dict[str, Any]:
         normalized = normalize_symbol(symbol)
+        query_symbol = to_yahoo_symbol(normalized)
         response = self.client.get(
-            f"https://query1.finance.yahoo.com/v8/finance/chart/{normalized}",
+            f"https://query1.finance.yahoo.com/v8/finance/chart/{query_symbol}",
             params={"range": period, "interval": interval, "includePrePost": "false"},
         )
         response.raise_for_status()
@@ -176,6 +177,7 @@ class YahooFinanceProvider:
 
     def get_quote(self, symbol: str) -> Quote:
         normalized = normalize_symbol(symbol)
+        query_symbol = to_yahoo_symbol(normalized)
         result = self._chart(normalized, "1d", "1m")
         meta = result.get("meta", {})
         timestamp = result.get("timestamp") or []
@@ -195,6 +197,8 @@ class YahooFinanceProvider:
             as_of = as_of_dt.isoformat() + "Z"
             is_realtime = datetime.utcnow() - as_of_dt <= timedelta(hours=36)
         notes = ["Yahoo public endpoints may be delayed or rate limited."]
+        if query_symbol != normalized:
+            notes.append(f"Yahoo 查询代码: {query_symbol}；展示代码按常见港股页面保留为 {normalized}。")
         if not is_realtime:
             notes.append("Latest Yahoo timestamp is older than 36 hours; treat it as delayed historical data.")
         return Quote(
@@ -231,19 +235,25 @@ class YahooFinanceProvider:
 
     def get_financials(self, symbol: str) -> Financials:
         normalized = normalize_symbol(symbol)
+        query_symbol = to_yahoo_symbol(normalized)
         modules = "summaryDetail,defaultKeyStatistics,financialData"
-        response = self.client.get(
-            f"https://query2.finance.yahoo.com/v10/finance/quoteSummary/{normalized}",
-            params={"modules": modules},
-        )
-        response.raise_for_status()
-        data = response.json()
-        result = (((data.get("quoteSummary") or {}).get("result") or [None])[0]) or {}
+        try:
+            response = self.client.get(
+                f"https://query2.finance.yahoo.com/v10/finance/quoteSummary/{query_symbol}",
+                params={"modules": modules},
+            )
+            response.raise_for_status()
+            data = response.json()
+            result = (((data.get("quoteSummary") or {}).get("result") or [None])[0]) or {}
+        except Exception as exc:
+            result = self._yfinance_info(query_symbol)
+            if not result:
+                raise ProviderError(f"Yahoo quote summary unavailable for {query_symbol}: {exc}") from exc
         if not result:
             raise ProviderError("empty Yahoo quote summary")
-        summary = result.get("summaryDetail") or {}
-        stats = result.get("defaultKeyStatistics") or {}
-        financial = result.get("financialData") or {}
+        summary = result.get("summaryDetail") or result
+        stats = result.get("defaultKeyStatistics") or result
+        financial = result.get("financialData") or result
         return Financials(
             symbol=normalized,
             source=self.name,
@@ -264,9 +274,10 @@ class YahooFinanceProvider:
 
     def get_news(self, symbol: str, limit: int = 5) -> list[NewsItem]:
         normalized = normalize_symbol(symbol)
+        query_symbol = to_yahoo_symbol(normalized)
         response = self.client.get(
             "https://query2.finance.yahoo.com/v1/finance/search",
-            params={"q": normalized, "quotesCount": "1", "newsCount": str(limit)},
+            params={"q": query_symbol, "quotesCount": "1", "newsCount": str(limit)},
         )
         response.raise_for_status()
         data = response.json()
@@ -285,6 +296,31 @@ class YahooFinanceProvider:
                 source=self.name,
             ))
         return items
+
+    def _yfinance_info(self, query_symbol: str) -> dict[str, Any]:
+        try:
+            import yfinance as yf  # type: ignore
+        except ImportError:
+            return {}
+        try:
+            info = yf.Ticker(query_symbol).info
+        except Exception:
+            return {}
+        if not isinstance(info, dict) or not info:
+            return {}
+        return {
+            "marketCap": info.get("marketCap") or info.get("enterpriseValue"),
+            "trailingPE": info.get("trailingPE"),
+            "forwardPE": info.get("forwardPE"),
+            "trailingEps": info.get("trailingEps"),
+            "totalRevenue": info.get("totalRevenue"),
+            "grossProfits": info.get("grossProfits"),
+            "netIncomeToCommon": info.get("netIncomeToCommon"),
+            "freeCashflow": info.get("freeCashflow"),
+            "debtToEquity": info.get("debtToEquity"),
+            "returnOnEquity": info.get("returnOnEquity"),
+            "profitMargins": info.get("profitMargins"),
+        }
 
 
 class TushareProvider:
@@ -546,7 +582,7 @@ class SampleDataProvider:
 
     def get_quote(self, symbol: str) -> Quote:
         normalized = normalize_symbol(symbol)
-        profile = _SAMPLE_PROFILES.get(normalized, _generic_profile(normalized))
+        profile = _sample_profile(normalized)
         history = self.get_history(normalized, "1y", "1d")
         last = history[-1].close if history else profile["price"]
         prev = history[-2].close if len(history) > 1 else profile["price"] * 0.99
@@ -572,7 +608,7 @@ class SampleDataProvider:
 
     def get_history(self, symbol: str, period: str = "1y", interval: str = "1d") -> list[Candle]:
         normalized = normalize_symbol(symbol)
-        profile = _SAMPLE_PROFILES.get(normalized, _generic_profile(normalized))
+        profile = _sample_profile(normalized)
         days = _period_to_days(period)
         base_price = profile["price"]
         trend = profile["trend"]
@@ -604,7 +640,7 @@ class SampleDataProvider:
 
     def get_financials(self, symbol: str) -> Financials:
         normalized = normalize_symbol(symbol)
-        profile = _SAMPLE_PROFILES.get(normalized, _generic_profile(normalized))
+        profile = _sample_profile(normalized)
         return Financials(
             symbol=normalized,
             source=self.name,
@@ -625,7 +661,7 @@ class SampleDataProvider:
 
     def get_news(self, symbol: str, limit: int = 5) -> list[NewsItem]:
         normalized = normalize_symbol(symbol)
-        profile = _SAMPLE_PROFILES.get(normalized, _generic_profile(normalized))
+        profile = _sample_profile(normalized)
         rows = [
             f"{profile['name']} 发布最新经营数据，市场关注收入增长和利润率变化",
             f"分析师讨论 {profile['name']} 的估值水平与行业竞争格局",
@@ -758,6 +794,13 @@ def _format_trade_date(value: str) -> str:
     if len(text) == 8 and text.isdigit():
         return f"{text[:4]}-{text[4:6]}-{text[6:]}"
     return text
+
+
+def _sample_profile(symbol: str) -> dict[str, Any]:
+    normalized = normalize_symbol(symbol)
+    if normalized not in _SAMPLE_PROFILES:
+        raise ProviderError(f"no sample fallback profile for {normalized}")
+    return _SAMPLE_PROFILES[normalized]
 
 
 def _generic_profile(symbol: str) -> dict[str, Any]:

@@ -23,7 +23,7 @@ def render_stock_report(snapshot: StockSnapshot) -> str:
         f"- 行情时间: {quote.as_of or '未知'}",
         f"- 是否实时/准实时: {'是' if quote.is_realtime else '否'}",
     ]
-    for note in quote.notes + financials.notes:
+    for note in _unique_notes(quote.notes + financials.notes):
         sections.append(f"- 数据备注: {note}")
 
     sections.extend([
@@ -171,6 +171,8 @@ def _risk_summary(quote: Quote, financials: Financials, indicators: dict[str, An
         risks.append("新闻和公告数据不足，事件驱动风险可能被遗漏。")
     if quote.source == "SAMPLE_FALLBACK" or financials.source == "SAMPLE_FALLBACK":
         risks.append("当前存在样例 fallback 数据，不能用于真实投资判断。")
+    if quote.source == "UNAVAILABLE" or financials.source == "UNAVAILABLE":
+        risks.append("部分核心数据源不可用，当前结论只能作为信息整理，不能用于投资判断。")
     if not risks:
         risks.append("当前未触发明显量化风险，但仍需补充行业、竞争、管理层和公告验证。")
     return "\n".join(f"- {risk}" for risk in risks)
@@ -179,6 +181,8 @@ def _risk_summary(quote: Quote, financials: Financials, indicators: dict[str, An
 def _conclusion(quote: Quote, financials: Financials, indicators: dict[str, Any]) -> str:
     if quote.source == "SAMPLE_FALLBACK" or financials.source == "SAMPLE_FALLBACK":
         return "研究结论：数据置信度不足，仅适合演示流程；请接入真实行情、财报和公告后再做判断。"
+    if quote.source == "UNAVAILABLE" or financials.source == "UNAVAILABLE":
+        return "研究结论：数据不完整；请先补齐真实行情、财报、公告或网页核验来源后再判断。"
 
     score = 0
     if financials.free_cash_flow is not None and financials.free_cash_flow > 0:
@@ -244,3 +248,11 @@ def _ratio_to_pct(value: Any) -> float | None:
     if abs(value) <= 2:
         return value * 100
     return value
+
+
+def _unique_notes(notes: list[str]) -> list[str]:
+    unique: list[str] = []
+    for note in notes:
+        if note not in unique:
+            unique.append(note)
+    return unique

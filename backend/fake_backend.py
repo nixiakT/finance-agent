@@ -22,7 +22,8 @@ class FakeBackend:
         # 金融任务：离线时也走 finance_route_task，方便无模型 API 的 Demo。
         if tools and any(k in str(last).lower() for k in (
             "股票", "金融", "行情", "财报", "估值", "回测", "策略", "选股", "辩论",
-            "自选股", "aapl", "nvda", "tsla", "amd", "msft", "贵州茅台",
+            "自选股", "标的", "上市", "港股", "智谱",
+            "aapl", "nvda", "tsla", "amd", "msft", "贵州茅台",
         )):
             return {
                 "role": "assistant",

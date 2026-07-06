@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from typing import Callable
 
 from finance.agent import FinanceResearchAgent
+from finance.web import web_fetch, web_search
 from tools.base import ToolRegistry
 
 
@@ -55,6 +56,16 @@ class CommandRouter:
             return CommandResult(True, self._tools())
         if command == "/sources":
             return CommandResult(True, self._sources())
+        if command == "/search":
+            try:
+                return CommandResult(True, self._search(args))
+            except ValueError as exc:
+                return CommandResult(True, str(exc))
+        if command == "/fetch":
+            try:
+                return CommandResult(True, self._fetch(args))
+            except ValueError as exc:
+                return CommandResult(True, str(exc))
 
         finance_commands = {
             "/quote": self._quote,
@@ -157,6 +168,18 @@ class CommandRouter:
     def _sources(self) -> str:
         providers = [provider.name for provider in self.finance.provider.providers]
         return "当前数据源优先级：\n" + "\n".join(f"{index}. {name}" for index, name in enumerate(providers, start=1))
+
+    def _search(self, args: list[str]) -> str:
+        query = " ".join(args).strip()
+        if not query:
+            raise ValueError("用法：/search 智谱 02513 股票")
+        self._trace_tool("web_search", {"query": query, "limit": 5})
+        return self._with_result_trace("web_search", web_search(query, 5))
+
+    def _fetch(self, args: list[str]) -> str:
+        url = _require_arg(args, "/fetch https://xueqiu.com/S/02513")
+        self._trace_tool("web_fetch", {"url": url})
+        return self._with_result_trace("web_fetch", web_fetch(url))
 
     def _think(self, args: list[str], think_enabled: bool) -> CommandResult:
         if not args:
