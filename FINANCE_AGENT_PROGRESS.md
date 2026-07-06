@@ -76,6 +76,7 @@
 - [x] 修复 CLI 输入体验：接入 `prompt_toolkit`，支持历史记录、光标移动、Backspace/Delete、Ctrl+A/E/U/K 和 slash command 补全。
 - [x] 修复重复提示符污染：自动清理用户误粘贴的 `finance-agent >` 前缀。
 - [x] 修复 `prompt_toolkit` 下 ANSI 颜色码原样显示的问题，使用 formatted ANSI prompt 渲染。
+- [x] 优化欢迎页视觉：重绘“招财进宝”金融猫 Logo，保持固定宽度和中英文对齐。
 
 ## 已实现功能
 
@@ -94,6 +95,7 @@
 - Skill：`skills/finance-stock/SKILL.md` 规定金融分析边界和流程。
 - Trace2Skill：`skills/trace2skill/SKILL.md` 和 `trace2skill_generate` 支持从成功轨迹生成新 Skill。
 - CLI 欢迎页：`python -m agent.cli` 显示招财猫入口。
+- CLI 品牌页：欢迎页包含“招财进宝”金融猫、研究边界和核心能力入口。
 - CLI 帮助菜单：`python -m agent.cli /help` 显示功能列表和示例命令。
 - CLI 交互模式：`python -m agent.cli` 后可在同一进程中持续提问，复用会话上下文。
 - CLI 命令模式：常用金融工具有对应 slash command，可绕过自然语言路由直接执行。

@@ -10,11 +10,15 @@ WIDTH = 76
 
 
 CAT = [
-    "        |\\      _,,,---,,_",
-    "  招财  /,`.-'`'    -.  ;-;;,_",
-    "       |,4-  ) )-,_. ,\\ (  `'-'",
-    "      '---''(_/--'  `-'\\_)",
-    "          lucky market cat",
+    "┌────────────────── 招财进宝 ──────────────────┐",
+    "│       /\\_/\\             HK  US  CN           │",
+    "│      (  o.o )        ┌─────────────┐         │",
+    "│       >  ^  <        │  研究为先   │         │",
+    "│     /|   金   |\\     │  风险可见   │         │",
+    "│    /_|___融___|_\\    └─────────────┘         │",
+    "│       /   |   \\        MA  RSI  PE           │",
+    "│      /____|____\\       DATA  NEWS            │",
+    "└──────────────────────────────────────────────┘",
 ]
 
 
@@ -123,9 +127,11 @@ def render_welcome() -> str:
     lines.append(_box_line(_color("FINANCE AGENT", "green")))
     lines.append(_box_line(_color("stock research · debate · strategy lab", "muted")))
     lines.append(_box_line(""))
+    cat_width = max(_display_width(row) for row in CAT)
     for row in CAT:
-        lines.append(_box_line(_color(row, "gold")))
+        lines.append(_box_line(_color(_pad_display(row, cat_width), "gold")))
     lines.append(_box_line(""))
+    lines.append(_box_line(_color("招财不许愿，研究讲证据", "gold")))
     lines.append(_box_line(_color("行情 · 基本面 · 新闻 · 技术指标 · 多智能体辩论 · 策略回测", "cyan")))
     lines.append(_box_line("只做研究辅助，不做自动交易，不承诺收益"))
     lines.append(_box_line(""))
@@ -202,3 +208,7 @@ def _display_width(text: str) -> int:
     for char in text:
         width += 2 if unicodedata.east_asian_width(char) in {"F", "W"} else 1
     return width
+
+
+def _pad_display(text: str, width: int) -> str:
+    return text + " " * max(width - _display_width(text), 0)
