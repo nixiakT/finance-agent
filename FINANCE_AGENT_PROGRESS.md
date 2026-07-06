@@ -75,6 +75,7 @@
 - [x] 增加 snapshot 容错：行情、历史、基本面、新闻可独立失败并在报告中明确标注。
 - [x] 修复 CLI 输入体验：接入 `prompt_toolkit`，支持历史记录、光标移动、Backspace/Delete、Ctrl+A/E/U/K 和 slash command 补全。
 - [x] 修复重复提示符污染：自动清理用户误粘贴的 `finance-agent >` 前缀。
+- [x] 修复 `prompt_toolkit` 下 ANSI 颜色码原样显示的问题，使用 formatted ANSI prompt 渲染。
 
 ## 已实现功能
 
@@ -173,3 +174,4 @@ CLI 输入修复验证：
 - `clean_user_input("finance-agent > finance-agent > /quote 智谱") -> /quote 智谱`。
 - `InteractiveInput` 在 TTY 中优先使用 `prompt_toolkit`，并维护 `~/.finance_agent_history`。
 - 非 TTY 管道输入仍保持兼容。
+- PTY 回归验证确认 prompt 不再显示 `^[[38;...` 转义乱码。

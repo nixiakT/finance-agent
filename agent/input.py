@@ -49,6 +49,7 @@ class InteractiveInput:
         try:
             from prompt_toolkit import PromptSession
             from prompt_toolkit.completion import WordCompleter
+            from prompt_toolkit.formatted_text import ANSI
             from prompt_toolkit.history import FileHistory
             from prompt_toolkit.key_binding import KeyBindings
         except Exception:
@@ -63,7 +64,7 @@ class InteractiveInput:
         history_path = Path.home() / ".finance_agent_history"
         completer = WordCompleter(self.commands, ignore_case=True, sentence=True)
         return PromptSession(
-            message=self.prompt,
+            message=ANSI(self.prompt),
             history=FileHistory(str(history_path)),
             completer=completer,
             complete_while_typing=False,
