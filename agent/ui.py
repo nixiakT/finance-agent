@@ -4,21 +4,45 @@ from __future__ import annotations
 import os
 import sys
 import unicodedata
+from datetime import datetime
+from pathlib import Path
+
+from config import load_local_env
 
 
-WIDTH = 76
+WIDTH = 82
 
 
-CAT = [
-    "┌────────────────── 招财进宝 ──────────────────┐",
-    "│       /\\_/\\             HK  US  CN           │",
-    "│      (  o.o )        ┌─────────────┐         │",
-    "│       >  ^  <        │  研究为先   │         │",
-    "│     /|   金   |\\     │  风险可见   │         │",
-    "│    /_|___融___|_\\    └─────────────┘         │",
-    "│       /   |   \\        MA  RSI  PE           │",
-    "│      /____|____\\       DATA  NEWS            │",
-    "└──────────────────────────────────────────────┘",
+LOGO = [
+    "     /\\_/\\        ┌───────────┐",
+    "    (  o.o )      │ 招财进宝  │",
+    "     >  ^  <      │ 研究为先  │",
+    "   /|   金   |\\   │ 风险可见  │",
+    "  /_|___融___|_\\  └───────────┘",
+    "     /   |   \\      HK  US  CN",
+    "    /____|____\\     MA RSI MACD",
+    "",
+    " {model}",
+]
+
+PANEL_ROWS = [
+    ("Available Tools", ""),
+    ("finance", "quote, history, financials, news"),
+    ("analysis", "indicators, report, compare"),
+    ("agents", "debate, risk, value, macro"),
+    ("strategy", "backtest, brief, trace2skill"),
+    ("web", "search, fetch, source check"),
+    ("", ""),
+    ("Market Sources", ""),
+    ("quotes", "Yahoo Finance, Alpha Vantage"),
+    ("A-share", "Tushare, AKShare"),
+    ("fallback", "sample data is clearly marked"),
+    ("", ""),
+    ("Commands", ""),
+    ("/help", "menu and examples"),
+    ("/think on", "show high-level tool trace"),
+    ("/search 智谱 02513", "verify listing pages"),
+    ("/quote AAPL", "fast market snapshot"),
 ]
 
 
@@ -122,23 +146,23 @@ Trace2Skill 自进化：
 
 def render_welcome() -> str:
     lines: list[str] = []
-    lines.append(_color("╭" + "─" * WIDTH + "╮", "gold"))
-    lines.append(_box_line(""))
-    lines.append(_box_line(_color("FINANCE AGENT", "green")))
-    lines.append(_box_line(_color("stock research · debate · strategy lab", "muted")))
-    lines.append(_box_line(""))
-    cat_width = max(_display_width(row) for row in CAT)
-    for row in CAT:
-        lines.append(_box_line(_color(_pad_display(row, cat_width), "gold")))
-    lines.append(_box_line(""))
-    lines.append(_box_line(_color("招财不许愿，研究讲证据", "gold")))
-    lines.append(_box_line(_color("行情 · 基本面 · 新闻 · 技术指标 · 多智能体辩论 · 策略回测", "cyan")))
-    lines.append(_box_line("只做研究辅助，不做自动交易，不承诺收益"))
-    lines.append(_box_line(""))
-    lines.append(_box_line(_color("Ask  ", "green") + "  分析一下 AAPL 最近三个月走势"))
-    lines.append(_box_line(_color("Help ", "cyan") + "  /help     " + _color("Exit ", "muted") + "  /exit     " + _color("History", "muted") + "  ↑/↓"))
-    lines.append(_box_line(""))
+    title = " Finance Agent v0.3.0 · stock research workspace "
+    lines.append(_color(_top_border(title), "gold"))
+    logo = _logo_rows()
+    body_rows = max(len(logo), len(PANEL_ROWS))
+    for index in range(body_rows):
+        left = logo[index] if index < len(logo) else ""
+        label, value = PANEL_ROWS[index] if index < len(PANEL_ROWS) else ("", "")
+        lines.append(_panel_line(left, _right_cell(label, value)))
+    lines.append(_panel_line("", ""))
+    lines.append(_panel_line(_muted(str(Path.cwd())), _right_cell("Session", _session_id())))
+    lines.append(_panel_line(_muted("research only · no auto trading"), _right_cell("Boundary", "facts, inference, risk")))
+    lines.append(_panel_line("", ""))
+    lines.append(_panel_line(_accent("Ask") + "  分析一下 AAPL 最近三个月走势", _accent("/help") + " commands  " + _muted("↑/↓ history")))
     lines.append(_color("╰" + "─" * WIDTH + "╯", "gold"))
+    lines.append("")
+    lines.append(_accent("Welcome to Finance Agent.") + " Type your message or /help for commands.")
+    lines.append(_muted("Tip: 数据优先标注来源和时间；SAMPLE_FALLBACK 只用于演示。"))
     return "\n".join(lines)
 
 
@@ -157,6 +181,48 @@ def render_trace(event: str, detail: str = "") -> str:
     if detail:
         return f"{prefix} · {event}: {detail}"
     return f"{prefix} · {event}"
+
+
+def _top_border(title: str) -> str:
+    title_width = _display_width(title)
+    inner_width = WIDTH
+    remaining = max(inner_width - title_width, 0)
+    left = remaining // 2
+    right = remaining - left
+    return "╭" + "─" * left + title + "─" * right + "╮"
+
+
+def _panel_line(left: str, right: str) -> str:
+    left_width = 39
+    right_width = WIDTH - left_width - 2
+    left_text = _truncate_display(left, left_width)
+    right_text = _truncate_display(right, right_width)
+    left_text = _pad_display(left_text, left_width)
+    right_text = _pad_display(right_text, right_width)
+    return (
+        _color("│", "gold")
+        + " "
+        + left_text
+        + " "
+        + right_text
+        + _color("│", "gold")
+    )
+
+
+def _right_cell(label: str, value: str) -> str:
+    if not label and not value:
+        return ""
+    if value:
+        return _accent(label + ": ") + value
+    return _accent(label)
+
+
+def _accent(text: str) -> str:
+    return _color(text, "cyan")
+
+
+def _muted(text: str) -> str:
+    return _color(text, "muted")
 
 
 def _box_line(text: str) -> str:
@@ -212,3 +278,28 @@ def _display_width(text: str) -> int:
 
 def _pad_display(text: str, width: int) -> str:
     return text + " " * max(width - _display_width(text), 0)
+
+
+def _truncate_display(text: str, width: int) -> str:
+    clean_width = _display_width(_strip_ansi(text))
+    if clean_width <= width:
+        return text
+    visible = ""
+    used = 0
+    for char in _strip_ansi(text):
+        char_width = 2 if unicodedata.east_asian_width(char) in {"F", "W"} else 1
+        if used + char_width > max(width - 1, 0):
+            break
+        visible += char
+        used += char_width
+    return visible + "…"
+
+
+def _session_id() -> str:
+    return datetime.now().strftime("%Y%m%d_%H%M%S")
+
+
+def _logo_rows() -> list[str]:
+    load_local_env()
+    model = os.environ.get("DEEPSEEK_MODEL", "model not configured")
+    return [row.format(model=model) for row in LOGO]
