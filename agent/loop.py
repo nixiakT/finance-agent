@@ -26,10 +26,13 @@ class AgentLoop:
         self.max_turns = max_turns          # 防死循环：硬上限
 
     def run(self, user_task: str) -> str:
-        messages: list[dict[str, Any]] = [
+        messages = [
             {"role": "system", "content": self.system_prompt},
             {"role": "user", "content": user_task},
         ]
+        return self.run_messages(messages)
+
+    def run_messages(self, messages: list[dict[str, Any]]) -> str:
         for turn in range(self.max_turns):
             assistant = self.backend.chat(messages, tools=self.registry.schemas())
             messages.append({"role": "assistant",
@@ -57,3 +60,27 @@ class AgentLoop:
             # TODO[Day7] 在这里做上下文管理：超出 token 预算时触发 compaction（见 agent/context.py）
 
         return "[达到最大轮数上限，未完成任务]"
+
+
+class AgentSession:
+    def __init__(self, loop: AgentLoop, max_history_messages: int = 24):
+        self.loop = loop
+        self.max_history_messages = max_history_messages
+        self.messages: list[dict[str, Any]] = [
+            {"role": "system", "content": loop.system_prompt},
+        ]
+
+    def ask(self, user_task: str) -> str:
+        self.messages.append({"role": "user", "content": user_task})
+        answer = self.loop.run_messages(self.messages)
+        self._compact_history()
+        return answer
+
+    def reset(self) -> None:
+        self.messages = [{"role": "system", "content": self.loop.system_prompt}]
+
+    def _compact_history(self) -> None:
+        if len(self.messages) <= self.max_history_messages + 1:
+            return
+        system = self.messages[0]
+        self.messages = [system, *self.messages[-self.max_history_messages:]]

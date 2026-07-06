@@ -65,6 +65,7 @@
 - [x] 接入 Tushare/AKShare 可选 A 股数据 Provider。
 - [x] 增加 `trace2skill` Skill 和 `trace2skill_generate` 工具。
 - [x] 优化 CLI：无参数启动显示招财猫欢迎页，`/help` 显示功能菜单。
+- [x] 优化 CLI：无参数启动进入持续交互会话，支持 `/help`、`/clear`、`/selfcheck`、`/exit`。
 
 ## 已实现功能
 
@@ -84,6 +85,7 @@
 - Trace2Skill：`skills/trace2skill/SKILL.md` 和 `trace2skill_generate` 支持从成功轨迹生成新 Skill。
 - CLI 欢迎页：`python -m agent.cli` 显示招财猫入口。
 - CLI 帮助菜单：`python -m agent.cli /help` 显示功能列表和示例命令。
+- CLI 交互模式：`python -m agent.cli` 后可在同一进程中持续提问，复用会话上下文。
 
 ## 使用说明
 

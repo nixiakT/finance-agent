@@ -10,7 +10,7 @@ import sys
 
 from tools.base import build_default_registry
 from agent.prompts import SYSTEM_PROMPT
-from agent.ui import render_help, render_welcome
+from agent.ui import render_help, render_prompt, render_welcome
 
 
 def build_system_prompt() -> str:
@@ -58,6 +58,53 @@ def welcome() -> int:
     return 0
 
 
+def build_agent():
+    from agent.loop import AgentLoop
+
+    reg = build_default_registry()
+    try:
+        from backend.client import DeepSeekBackend
+        backend = DeepSeekBackend()
+    except Exception as e:  # noqa: BLE001
+        from backend.fake_backend import FakeBackend
+        print(f"[提示] 未启用真后端（{e}），回退 FakeBackend。配置 DEEPSEEK_API_KEY 后即用真模型。")
+        backend = FakeBackend()
+    return AgentLoop(backend, reg, build_system_prompt())
+
+
+def interactive() -> int:
+    from agent.loop import AgentSession
+
+    print(render_welcome())
+    print()
+    agent = build_agent()
+    session = AgentSession(agent)
+    while True:
+        try:
+            user_input = input(render_prompt())
+        except (EOFError, KeyboardInterrupt):
+            print("\nbye.")
+            return 0
+        task = user_input.strip()
+        if not task:
+            continue
+        command = task.lower()
+        if command in {"/exit", "/quit", "exit", "quit"}:
+            print("bye.")
+            return 0
+        if command in {"/help", "help"}:
+            print(render_help())
+            continue
+        if command in {"/clear", "clear"}:
+            session.reset()
+            print("已清空当前会话上下文。")
+            continue
+        if command in {"/selfcheck", "selfcheck"}:
+            selfcheck()
+            continue
+        print(session.ask(task))
+
+
 def main(argv: list[str] | None = None) -> int:
     p = argparse.ArgumentParser(prog="mini-openclaw")
     p.add_argument("task", nargs="?", help="要让 agent 完成的任务（自然语言）")
@@ -67,22 +114,13 @@ def main(argv: list[str] | None = None) -> int:
     if args.selfcheck:
         return selfcheck()
     if not args.task:
-        return welcome()
+        return interactive()
     if args.task.strip().lower() in {"/help", "help"}:
         print(render_help())
         return 0
 
     # 真正跑任务：优先用 DeepSeek API；没配 key 时回退到 FakeBackend（离线打通管道）
-    from agent.loop import AgentLoop
-    reg = build_default_registry()
-    try:
-        from backend.client import DeepSeekBackend
-        backend = DeepSeekBackend()                       # 需要 DEEPSEEK_API_KEY
-    except Exception as e:  # noqa
-        from backend.fake_backend import FakeBackend
-        print(f"[提示] 未启用真后端（{e}），回退 FakeBackend。配置 DEEPSEEK_API_KEY 后即用真模型。")
-        backend = FakeBackend()
-    agent = AgentLoop(backend, reg, build_system_prompt())
+    agent = build_agent()
     print(agent.run(args.task))
     return 0
 

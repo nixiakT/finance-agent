@@ -22,7 +22,12 @@
 pip install -r requirements.txt
 
 python -m agent.cli
-python -m agent.cli /help
+# 进入后可以持续对话：
+# finance-agent > /help
+# finance-agent > 分析一下 AAPL 最近三个月走势
+# finance-agent > /exit
+
+python -m agent.cli /help       # 也可以单次查看帮助
 python -m agent.cli --selfcheck
 python -m agent.cli "分析一下 AAPL 最近三个月走势，并生成投资研究摘要"
 python -m agent.cli "比较 NVDA 和 AMD 的基本面和技术面"
@@ -31,7 +36,7 @@ python -m agent.cli "帮我回测 TSLA 的 20 日均线上穿 60 日均线策略
 python -m agent.cli "生成我的自选股每日简报：AAPL, MSFT, NVDA"
 ```
 
-`python -m agent.cli` 会显示招财猫欢迎页；`/help` 会列出行情、报告、辩论、回测、自选股简报和 Trace2Skill 等功能。
+`python -m agent.cli` 会显示招财猫欢迎页并进入持续对话。会话内支持 `/help`、`/clear`、`/selfcheck` 和 `/exit`。`/help` 会列出行情、报告、辩论、回测、自选股简报和 Trace2Skill 等功能。
 
 没有配置 `DEEPSEEK_API_KEY` 时，`FakeBackend` 会把金融任务路由到 `finance_route_task`，仍然可以跑通 Demo。配置真模型后，Agent 会自动使用 DeepSeek API 选择工具和组织答案。
 

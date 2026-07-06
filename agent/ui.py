@@ -24,12 +24,16 @@ finance-agent 功能菜单
 基础命令：
   /help
     显示当前功能菜单。
-  --selfcheck
+  /selfcheck 或 --selfcheck
     运行工具注册、后端和主循环自检。
+  /clear
+    清空当前会话上下文。
+  /exit
+    退出交互会话。
 
 股票研究：
-  python -m agent.cli "分析一下 AAPL 最近三个月走势，并生成投资研究摘要"
-  python -m agent.cli "分析一下 贵州茅台 的基本面和技术面"
+  分析一下 AAPL 最近三个月走势，并生成投资研究摘要
+  分析一下 贵州茅台 的基本面和技术面
 
 行情与数据：
   - 实时/准实时行情：价格、涨跌幅、成交量、市值等
@@ -50,15 +54,15 @@ finance-agent 功能菜单
   - 达利欧：宏观周期、利率、组合风险
 
 多智能体辩论：
-  python -m agent.cli "用多智能体辩论 NVDA 和 AMD 哪个更值得继续研究"
+  用多智能体辩论 NVDA 和 AMD 哪个更值得继续研究
   角色包括 Bull、Bear、Value、Macro、Risk、Judge。
 
 策略辅助：
-  python -m agent.cli "帮我回测 TSLA 的 20 日均线上穿 60 日均线策略"
+  帮我回测 TSLA 的 20 日均线上穿 60 日均线策略
   当前支持移动均线交叉策略回测。
 
 自选股简报：
-  python -m agent.cli "生成我的自选股每日简报：AAPL, MSFT, NVDA"
+  生成我的自选股每日简报：AAPL, MSFT, NVDA
 
 Trace2Skill 自进化：
   可把成功任务轨迹沉淀成新的 skills/<name>/SKILL.md。
@@ -85,8 +89,8 @@ def render_welcome() -> str:
     lines.append(_box_line(_color("行情 · 基本面 · 新闻 · 技术指标 · 多智能体辩论 · 策略回测", "cyan")))
     lines.append(_box_line("只做研究辅助，不做自动交易，不承诺收益"))
     lines.append(_box_line(""))
-    lines.append(_box_line(_color("Start", "green") + "  python -m agent.cli \"分析一下 AAPL 最近三个月走势\""))
-    lines.append(_box_line(_color("Help ", "cyan") + "  python -m agent.cli /help"))
+    lines.append(_box_line(_color("Ask  ", "green") + "  分析一下 AAPL 最近三个月走势"))
+    lines.append(_box_line(_color("Help ", "cyan") + "  /help     " + _color("Exit ", "muted") + "  /exit     " + _color("Clear", "muted") + "  /clear"))
     lines.append(_box_line(""))
     lines.append(_color("╰" + "─" * WIDTH + "╯", "gold"))
     return "\n".join(lines)
@@ -94,6 +98,12 @@ def render_welcome() -> str:
 
 def render_help() -> str:
     return HELP
+
+
+def render_prompt() -> str:
+    if not sys.stdin.isatty():
+        return ""
+    return _color("finance-agent", "green") + _color(" > ", "muted")
 
 
 def _box_line(text: str) -> str:
