@@ -1,19 +1,21 @@
 """CLI presentation helpers."""
 from __future__ import annotations
 
+import os
+import sys
+import unicodedata
 
-WELCOME = r"""
-       /\_/\
-      ( o.o )
-       > ^ <
-   ____/| |\____
-  /    FINANCE   \
- /   AGENT  招财  \
- \______________/
 
-欢迎使用 finance-agent。
-输入 /help 查看功能菜单；输入自然语言任务开始分析。
-""".strip("\n")
+WIDTH = 76
+
+
+CAT = [
+    "        |\\      _,,,---,,_",
+    "  招财  /,`.-'`'    -.  ;-;;,_",
+    "       |,4-  ) )-,_. ,\\ (  `'-'",
+    "      '---''(_/--'  `-'\\_)",
+    "          lucky market cat",
+]
 
 
 HELP = """
@@ -71,8 +73,75 @@ Trace2Skill 自进化：
 
 
 def render_welcome() -> str:
-    return WELCOME
+    lines: list[str] = []
+    lines.append(_color("╭" + "─" * WIDTH + "╮", "gold"))
+    lines.append(_box_line(""))
+    lines.append(_box_line(_color("FINANCE AGENT", "green")))
+    lines.append(_box_line(_color("stock research · debate · strategy lab", "muted")))
+    lines.append(_box_line(""))
+    for row in CAT:
+        lines.append(_box_line(_color(row, "gold")))
+    lines.append(_box_line(""))
+    lines.append(_box_line(_color("行情 · 基本面 · 新闻 · 技术指标 · 多智能体辩论 · 策略回测", "cyan")))
+    lines.append(_box_line("只做研究辅助，不做自动交易，不承诺收益"))
+    lines.append(_box_line(""))
+    lines.append(_box_line(_color("Start", "green") + "  python -m agent.cli \"分析一下 AAPL 最近三个月走势\""))
+    lines.append(_box_line(_color("Help ", "cyan") + "  python -m agent.cli /help"))
+    lines.append(_box_line(""))
+    lines.append(_color("╰" + "─" * WIDTH + "╯", "gold"))
+    return "\n".join(lines)
 
 
 def render_help() -> str:
     return HELP
+
+
+def _box_line(text: str) -> str:
+    visible = _strip_ansi(text)
+    padding = max(WIDTH - _display_width(visible), 0)
+    left = padding // 2
+    right = padding - left
+    return _color("│", "gold") + " " * left + text + " " * right + _color("│", "gold")
+
+
+def _color(text: str, name: str) -> str:
+    if not _should_color():
+        return text
+    colors = {
+        "gold": "\033[38;5;220m",
+        "green": "\033[38;5;82m",
+        "cyan": "\033[38;5;80m",
+        "muted": "\033[38;5;245m",
+    }
+    reset = "\033[0m"
+    return f"{colors.get(name, '')}{text}{reset}"
+
+
+def _should_color() -> bool:
+    if os.environ.get("NO_COLOR"):
+        return False
+    if os.environ.get("FORCE_COLOR"):
+        return True
+    return sys.stdout.isatty()
+
+
+def _strip_ansi(text: str) -> str:
+    out = []
+    i = 0
+    while i < len(text):
+        if text[i:i + 2] == "\033[":
+            i += 2
+            while i < len(text) and text[i] != "m":
+                i += 1
+            i += 1
+            continue
+        out.append(text[i])
+        i += 1
+    return "".join(out)
+
+
+def _display_width(text: str) -> int:
+    width = 0
+    for char in text:
+        width += 2 if unicodedata.east_asian_width(char) in {"F", "W"} else 1
+    return width
