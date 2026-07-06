@@ -10,6 +10,7 @@ import sys
 
 from tools.base import build_default_registry
 from agent.prompts import SYSTEM_PROMPT
+from agent.ui import render_help, render_welcome
 
 
 def build_system_prompt() -> str:
@@ -52,14 +53,24 @@ def selfcheck() -> int:
     return 0 if ok else 1
 
 
+def welcome() -> int:
+    print(render_welcome())
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     p = argparse.ArgumentParser(prog="mini-openclaw")
     p.add_argument("task", nargs="?", help="要让 agent 完成的任务（自然语言）")
     p.add_argument("--selfcheck", action="store_true", help="只做骨架自检")
     args = p.parse_args(argv)
 
-    if args.selfcheck or not args.task:
+    if args.selfcheck:
         return selfcheck()
+    if not args.task:
+        return welcome()
+    if args.task.strip().lower() in {"/help", "help"}:
+        print(render_help())
+        return 0
 
     # 真正跑任务：优先用 DeepSeek API；没配 key 时回退到 FakeBackend（离线打通管道）
     from agent.loop import AgentLoop

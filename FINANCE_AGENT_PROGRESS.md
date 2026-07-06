@@ -64,6 +64,7 @@
 - [x] 兼容带 `/v1` 的 OpenAI-compatible base URL。
 - [x] 接入 Tushare/AKShare 可选 A 股数据 Provider。
 - [x] 增加 `trace2skill` Skill 和 `trace2skill_generate` 工具。
+- [x] 优化 CLI：无参数启动显示招财猫欢迎页，`/help` 显示功能菜单。
 
 ## 已实现功能
 
@@ -81,11 +82,15 @@
 - 离线路由：未配置真模型时，`FakeBackend` 会用 `finance_route_task` 跑通金融 Demo。
 - Skill：`skills/finance-stock/SKILL.md` 规定金融分析边界和流程。
 - Trace2Skill：`skills/trace2skill/SKILL.md` 和 `trace2skill_generate` 支持从成功轨迹生成新 Skill。
+- CLI 欢迎页：`python -m agent.cli` 显示招财猫入口。
+- CLI 帮助菜单：`python -m agent.cli /help` 显示功能列表和示例命令。
 
 ## 使用说明
 
 ```bash
 python -m agent.cli --selfcheck
+python -m agent.cli
+python -m agent.cli /help
 python -m agent.cli "分析一下 AAPL 最近三个月走势，并生成投资研究摘要"
 python -m agent.cli "比较 NVDA 和 AMD 的基本面和技术面"
 python -m agent.cli "用巴菲特、段永平、达利欧三个视角分析 NVDA，并让多智能体辩论是否值得继续跟踪"
