@@ -14,15 +14,23 @@ WIDTH = 82
 
 
 LOGO = [
-    "     /\\_/\\        ┌───────────┐",
-    "    (  o.o )      │ 招财进宝  │",
-    "     >  ^  <      │ 研究为先  │",
-    "   /|   金   |\\   │ 风险可见  │",
-    "  /_|___融___|_\\  └───────────┘",
-    "     /   |   \\      HK  US  CN",
-    "    /____|____\\     MA RSI MACD",
-    "",
-    " {model}",
+    "┌────────── 招财进宝 ──────────┐",
+    "│        /\\_/\\      HK US CN   │",
+    "│       (  o.o )    MA RSI PE  │",
+    "│        >  ^  <    DATA NEWS  │",
+    "│      /|   金   |\\            │",
+    "│     /_|___融___|_\\           │",
+    "│        /   |   \\             │",
+    "│       /____|____\\            │",
+    "├────────── Research ──────────┤",
+    "│ model                        │",
+    "{model_row}",
+    "│                              │",
+    "│ mode                         │",
+    "│ research only                │",
+    "│ no auto trading              │",
+    "│ facts · inference · risk     │",
+    "└──────────────────────────────┘",
 ]
 
 PANEL_ROWS = [
@@ -193,7 +201,7 @@ def _top_border(title: str) -> str:
 
 
 def _panel_line(left: str, right: str) -> str:
-    left_width = 39
+    left_width = 35
     right_width = WIDTH - left_width - 2
     left_text = _truncate_display(left, left_width)
     right_text = _truncate_display(right, right_width)
@@ -202,7 +210,7 @@ def _panel_line(left: str, right: str) -> str:
     return (
         _color("│", "gold")
         + " "
-        + left_text
+        + _color(left_text, "gold")
         + " "
         + right_text
         + _color("│", "gold")
@@ -302,4 +310,17 @@ def _session_id() -> str:
 def _logo_rows() -> list[str]:
     load_local_env()
     model = os.environ.get("DEEPSEEK_MODEL", "model not configured")
-    return [row.format(model=model) for row in LOGO]
+    rows = []
+    for row in LOGO:
+        if row == "{model_row}":
+            rows.append(_logo_box_row(model))
+        else:
+            rows.append(row)
+    return rows
+
+
+def _logo_box_row(text: str) -> str:
+    content_width = 30
+    content = _truncate_display(text, content_width - 2)
+    content = _pad_display(content, content_width - 2)
+    return "│ " + content + " │"

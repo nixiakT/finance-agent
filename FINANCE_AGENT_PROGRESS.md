@@ -78,6 +78,7 @@
 - [x] 修复 `prompt_toolkit` 下 ANSI 颜色码原样显示的问题，使用 formatted ANSI prompt 渲染。
 - [x] 优化欢迎页视觉：重绘“招财进宝”金融猫 Logo，保持固定宽度和中英文对齐。
 - [x] 参考 Hermes 风格重构欢迎页：双栏启动面板，展示品牌视觉、工具、数据源、命令、会话和风险边界。
+- [x] 加强欢迎页金色品牌区：左侧招财猫/研究卡片整体使用金色，补齐模型、模式和边界信息，减少空白。
 
 ## 已实现功能
 
@@ -98,6 +99,7 @@
 - CLI 欢迎页：`python -m agent.cli` 显示招财猫入口。
 - CLI 品牌页：欢迎页包含“招财进宝”金融猫、研究边界和核心能力入口。
 - CLI 启动面板：双栏展示 Logo、Available Tools、Market Sources、Commands、Session 和 Boundary。
+- CLI 金色品牌区：左侧完整卡片展示招财进宝猫、模型、research only 和 no auto trading。
 - CLI 帮助菜单：`python -m agent.cli /help` 显示功能列表和示例命令。
 - CLI 交互模式：`python -m agent.cli` 后可在同一进程中持续提问，复用会话上下文。
 - CLI 命令模式：常用金融工具有对应 slash command，可绕过自然语言路由直接执行。
