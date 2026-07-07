@@ -68,6 +68,18 @@ def test_sources_command_reports_provider_status() -> None:
     assert "TEST: enabled - unit test" in output
 
 
+def test_resolve_command_uses_finance_resolver() -> None:
+    class Finance:
+        def resolve_symbol(self, query: str) -> str:
+            return f"resolved {query}"
+
+    router = CommandRouter(ToolRegistry(), finance_agent=Finance())  # type: ignore[arg-type]
+
+    output = router.handle("/resolve minimax").output
+
+    assert output == "resolved minimax"
+
+
 def test_finance_command_surfaces_provider_error_without_traceback() -> None:
     class Finance:
         def get_quote(self, symbol: str) -> str:

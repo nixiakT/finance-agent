@@ -16,6 +16,10 @@ def _get_quote(symbol: str) -> str:
     return _agent.get_quote(symbol)
 
 
+def _resolve_symbol(query: str, limit: int = 8) -> str:
+    return _agent.resolve_symbol(query, limit)
+
+
 def _get_price_history(symbol: str, period: str = "1y", format: str = "summary") -> str:
     return _agent.get_price_history(symbol, period, format)
 
@@ -79,6 +83,20 @@ finance_get_quote_tool = Tool(
         "required": ["symbol"],
     },
     run=_get_quote,
+)
+
+finance_resolve_symbol_tool = Tool(
+    name="finance_resolve_symbol",
+    description="把公司名、简称、中文名、英文名或 ticker 解析为可交易股票代码，覆盖 A 股、港股和美股候选。",
+    parameters={
+        "type": "object",
+        "properties": {
+            "query": {"type": "string", "description": "公司名、简称、中文名、英文名或 ticker"},
+            "limit": {"type": "integer", "description": "候选数量，默认 8"},
+        },
+        "required": ["query"],
+    },
+    run=_resolve_symbol,
 )
 
 finance_get_price_history_tool = Tool(
@@ -214,6 +232,7 @@ finance_daily_brief_tool = Tool(
 
 finance_tools = [
     finance_route_task_tool,
+    finance_resolve_symbol_tool,
     finance_get_quote_tool,
     finance_get_price_history_tool,
     finance_get_financials_tool,

@@ -98,6 +98,8 @@
 - [x] 自测迭代：Yahoo 新闻结果增加标的相关性过滤，避免把无关股票新闻放进报告。
 - [x] 自测迭代：回测窗口倒置时明确说明规范化结果，并去重提示。
 - [x] 自测迭代：改用 timezone-aware UTC 时间，消除 Python 3.13 `datetime.utcnow()` 弃用 warning。
+- [x] 增加通用标的解析：`finance_resolve_symbol` / `/resolve` 可用公司名、简称、中文名、英文名动态解析 A 股、港股、美股候选，不再依赖逐个硬编码。
+- [x] 修复 MiniMax 查询：`minimax`、`稀宇科技` 等名称优先通过东方财富/Yahoo/web 搜索解析到港股候选，再查行情。
 
 ## 已实现功能
 
@@ -131,6 +133,7 @@
 - 网页工具：`web_search` 使用公开搜索结果核验来源；搜索入口失败时会生成公开财经页面 fallback；`web_fetch` 抓取指定 URL 并标注 WAF/JS/连接限制。
 - 新闻过滤：Yahoo 新闻会按 symbol、查询代码、公司名关键词过滤，过滤后为空时明确说明相关新闻不足。
 - 错误呈现：slash command 捕获数据源错误并返回用户可读信息，避免 Python traceback 泄漏到 CLI。
+- 标的解析：`finance_resolve_symbol` 使用东方财富 suggest、Yahoo Finance search、AKShare 和网页搜索 fallback 解析 A 股/港股/美股候选。
 
 ## 使用说明
 

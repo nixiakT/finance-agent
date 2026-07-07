@@ -7,6 +7,7 @@ from .debate import debate_stocks
 from .indicators import calculate_indicators, format_indicators
 from .models import Financials, NewsItem, Quote, StockSnapshot, utc_now_iso
 from .report import render_comparison, render_daily_brief, render_stock_report
+from .resolver import resolve_symbol, resolve_symbol_text
 from .symbols import extract_symbols, normalize_symbol
 from .web import web_search
 
@@ -16,7 +17,7 @@ class FinanceResearchAgent:
         self.provider = provider or ProviderChain()
 
     def snapshot(self, symbol: str, period: str = "1y", news_limit: int = 5) -> StockSnapshot:
-        normalized = normalize_symbol(symbol)
+        normalized = _resolve_symbol(symbol)
         errors: list[str] = []
         try:
             quote = self.provider.get_quote(normalized)
@@ -80,7 +81,7 @@ class FinanceResearchAgent:
         )
 
     def get_quote(self, symbol: str) -> str:
-        normalized = normalize_symbol(symbol)
+        normalized = _resolve_symbol(symbol)
         quote = self.provider.get_quote(normalized)
         return "\n".join([
             f"标的: {normalized} {quote.name}".strip(),
@@ -94,7 +95,7 @@ class FinanceResearchAgent:
         ])
 
     def get_price_history(self, symbol: str, period: str = "1y", format: str = "summary") -> str:
-        normalized = normalize_symbol(symbol)
+        normalized = _resolve_symbol(symbol)
         try:
             history = self.provider.get_history(normalized, period, "1d")
         except Exception as exc:
@@ -114,7 +115,7 @@ class FinanceResearchAgent:
         return render_stock_report(snapshot).split("## 新闻事件")[0].strip()
 
     def get_news(self, symbol: str, limit: int = 5) -> str:
-        normalized = normalize_symbol(symbol)
+        normalized = _resolve_symbol(symbol)
         try:
             news = self.provider.get_news(normalized, limit)
         except Exception as exc:
@@ -132,7 +133,7 @@ class FinanceResearchAgent:
         return "\n".join(lines)
 
     def calculate_indicators(self, symbol: str, period: str = "1y") -> str:
-        normalized = normalize_symbol(symbol)
+        normalized = _resolve_symbol(symbol)
         try:
             history = self.provider.get_history(normalized, period, "1d")
         except Exception as exc:
@@ -181,6 +182,8 @@ class FinanceResearchAgent:
 
     def route_task(self, task: str) -> str:
         symbols = extract_symbols(task)
+        if not symbols and _looks_like_stock_task(task):
+            symbols = [_resolve_symbol(_extract_name_query(task))]
         if not symbols:
             symbols = ["AAPL"]
         lowered = task.lower()
@@ -200,7 +203,7 @@ class FinanceResearchAgent:
         return self.generate_report(symbols[0], period or "1y")
 
     def verify_symbol_task(self, task: str, symbol: str) -> str:
-        normalized = normalize_symbol(symbol)
+        normalized = _resolve_symbol(symbol)
         query = _verification_query(task, normalized)
         parts = [
             "# 标的核验",
@@ -219,7 +222,7 @@ class FinanceResearchAgent:
 
     def market_update_task(self, task: str, symbol: str) -> str:
         """Return a source-first market update for today's/latest status questions."""
-        normalized = normalize_symbol(symbol)
+        normalized = _resolve_symbol(symbol)
         query = _verification_query(task, normalized)
         parts = [
             "# 今日市场核验",
@@ -244,6 +247,9 @@ class FinanceResearchAgent:
         ]
         return "\n".join(parts)
 
+    def resolve_symbol(self, query: str, limit: int = 8) -> str:
+        return resolve_symbol_text(query, limit)
+
 
 def _coerce_symbols(symbols: list[str] | str) -> list[str]:
     if isinstance(symbols, str):
@@ -251,8 +257,8 @@ def _coerce_symbols(symbols: list[str] | str) -> list[str]:
         if extracted:
             return extracted
         raw = [part.strip() for part in symbols.replace("，", ",").split(",")]
-        return [normalize_symbol(part) for part in raw if part]
-    return [normalize_symbol(symbol) for symbol in symbols if symbol]
+        return [_resolve_symbol(part) for part in raw if part]
+    return [_resolve_symbol(symbol) for symbol in symbols if symbol]
 
 
 def _extract_period(task: str) -> str:
@@ -271,7 +277,28 @@ def _extract_period(task: str) -> str:
 
 
 def _is_market_update_task(task: str) -> bool:
-    return any(token in task for token in ("今天", "今日", "当天", "现在", "最新", "情况", "怎么了"))
+    return any(token in task for token in ("今天", "今日", "当天", "现在", "最新", "情况", "怎么了", "股价", "行情"))
+
+
+def _resolve_symbol(symbol: str) -> str:
+    try:
+        return resolve_symbol(symbol).symbol
+    except Exception:
+        return normalize_symbol(symbol)
+
+
+def _looks_like_stock_task(task: str) -> bool:
+    lowered = task.lower()
+    return any(token in task for token in ("股价", "股票", "行情", "走势", "今天", "今日", "最新", "上市")) or any(
+        token in lowered for token in ("stock", "quote", "price", "ticker")
+    )
+
+
+def _extract_name_query(task: str) -> str:
+    cleaned = task
+    for token in ("股价", "股票", "行情", "走势", "今天", "今日", "最新", "怎么样", "如何", "看看", "看一下", "查一下", "上市"):
+        cleaned = cleaned.replace(token, " ")
+    return " ".join(cleaned.split()) or task
 
 
 def _compact_error(exc: Exception, limit: int = 220) -> str:

@@ -70,6 +70,7 @@ class CommandRouter:
 
         finance_commands = {
             "/quote": self._quote,
+            "/resolve": self._resolve,
             "/history": self._history,
             "/financials": self._financials,
             "/news": self._news,
@@ -93,6 +94,13 @@ class CommandRouter:
         symbol = _require_arg(args, "/quote AAPL")
         self._trace_tool("finance_get_quote", {"symbol": symbol})
         return self._with_result_trace("finance_get_quote", self.finance.get_quote(symbol))
+
+    def _resolve(self, args: list[str]) -> str:
+        query = " ".join(args).strip()
+        if not query:
+            raise ValueError("用法：/resolve minimax")
+        self._trace_tool("finance_resolve_symbol", {"query": query})
+        return self._with_result_trace("finance_resolve_symbol", self.finance.resolve_symbol(query))
 
     def _history(self, args: list[str]) -> str:
         symbol = _require_arg(args, "/history AAPL [period]")

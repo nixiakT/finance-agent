@@ -51,7 +51,7 @@ PANEL_ROWS = [
     ("Commands", ""),
     ("/help", "menu and examples"),
     ("/think on", "show high-level tool trace"),
-    ("/search 智谱 02513", "verify listing pages"),
+    ("/resolve minimax", "find ticker candidates"),
     ("/quote AAPL", "fast market snapshot"),
 ]
 
@@ -82,6 +82,8 @@ finance-agent 功能菜单
 一键命令：
   /quote AAPL
     查询行情。
+  /resolve minimax
+    解析公司名、简称、中文名、英文名或 ticker，返回 A 股/港股/美股候选代码。
   /history AAPL 1y
     查看历史价格和技术指标摘要。
   /financials AAPL
@@ -139,6 +141,7 @@ finance-agent 功能菜单
   生成我的自选股每日简报：AAPL, MSFT, NVDA
 
 网页核验：
+  /resolve minimax
   /search 智谱 02513 股票
   /fetch https://stock.finance.sina.com.cn/hkstock/quotes/02513.html
 
