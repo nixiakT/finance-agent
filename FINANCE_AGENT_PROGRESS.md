@@ -115,6 +115,7 @@
 - [x] 增加可配置 HTTP 代理：`FINANCE_HTTP_PROXY` 和 `/proxy status/test/set/off`，网页搜索、抓取、Yahoo、Eastmoney 等查询统一走代理。
 - [x] 修复 SpaceX 最新上市核验路径：`SpaceX` 解析为 `SPCX`，市场更新增加“上市状态与代码核验”段落。
 - [x] CLI 支持中英文切换：`FINANCE_AGENT_LANG=zh|en` 和 `/lang zh|en`；README 增加 English Quick Start。
+- [x] README 支持中英文自由选择：中文 `README.md` 与英文 `README_EN.md` 顶部互相跳转。
 - [x] 单次和交互自然语言金融查询优先走确定性 `finance_route_task`，防止新上市/改名标的被模型旧知识误判；普通开发任务仍走 ReAct 主循环。
 - [x] 增加微信连接适配器：默认 dry-run outbox，支持企业微信 webhook 和本地 HTTP relay。
 - [x] 增加金融自进化 memory：保存偏好、纠错、数据源经验、风险规则，并支持从轨迹更新 `finance-research-evolution` Skill。
