@@ -20,11 +20,23 @@ def maybe_compact(messages: list[dict[str, Any]], budget: int = 6000) -> list[di
     """超预算则压缩历史，返回新的 messages。"""
     if estimate_tokens(messages) <= budget:
         return messages
-    # TODO[Day7] 实现 compaction：
-    #   1) 保留 system（第0条）
-    #   2) 把中间较早的 user/assistant/tool 摘要成一条 system 备忘（可调后端做摘要）
-    #   3) 保留最近 K 轮原文
-    raise NotImplementedError("Day7：实现 compaction")
+    if len(messages) <= 4:
+        return messages
+
+    system = messages[0]
+    keep_recent = min(8, max(3, len(messages) // 3))
+    older = messages[1:-keep_recent]
+    recent = messages[-keep_recent:]
+    memo_lines = ["Earlier conversation was compacted. Key prior entries:"]
+    for message in older[-12:]:
+        role = message.get("role", "message")
+        name = f"/{message.get('name')}" if message.get("name") else ""
+        content = truncate_observation(str(message.get("content", "")), 500)
+        content = " ".join(content.split())
+        if content:
+            memo_lines.append(f"- {role}{name}: {content}")
+    compacted = {"role": "system", "content": "\n".join(memo_lines)}
+    return [system, compacted, *recent]
 
 
 def truncate_observation(text: str, max_chars: int = 4000) -> str:

@@ -7,6 +7,7 @@ numpy>=1.24          # pandas/指标计算基础依赖
 yfinance>=0.2        # 可选数据源，后续可替换 Provider 使用
 tushare>=1.4         # 可选 A 股数据源，需要 TUSHARE_TOKEN
 akshare>=1.16        # 可选 A 股数据源，东方财富等公开财经数据接口
+pytest>=8.0          # 本地回归测试
 
 # --- Day7 web_fetch 工具 ---
 markdownify>=0.13    # web_fetch: HTML -> markdown

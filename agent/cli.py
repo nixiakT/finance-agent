@@ -27,11 +27,11 @@ def build_system_prompt() -> str:
 
 
 def selfcheck() -> int:
-    print("== mini-OpenClaw 自检 ==")
+    print("== finance-agent 自检 ==")
     ok = True
     try:
         reg = build_default_registry()
-        print(f"[ok] 工具注册表加载成功，当前内置工具数：{len(reg)}（Day5 起会变多）")
+        print(f"[ok] 工具注册表加载成功，当前内置工具数：{len(reg)}")
         print(f"     工具：{', '.join(reg.names())}")
     except Exception as e:  # noqa
         print(f"[FAIL] 工具注册表：{e}"); ok = False
@@ -45,12 +45,12 @@ def selfcheck() -> int:
 
     try:
         from agent.loop import AgentLoop  # noqa
-        print("[ok] 主循环模块可导入（Day5 实现 run 逻辑）")
+        print("[ok] 主循环模块可导入")
     except Exception as e:  # noqa
         print(f"[FAIL] 主循环：{e}"); ok = False
 
     print("== 自检", "通过 ✅" if ok else "未通过 ❌", "==")
-    print("\n下一步：按 dayNN 的 lab-guide 填 # TODO 标记。")
+    print("\n可继续运行：python -m agent.cli /help 或 python -m agent.cli")
     return 0 if ok else 1
 
 
@@ -91,6 +91,8 @@ def make_observer(enabled):
             print(render_trace("tool result", f"{payload.get('name')} -> {payload.get('preview')}"))
         elif event == "tool_error":
             print(render_trace("tool error", f"{payload.get('name')} -> {payload.get('error')}"))
+        elif event == "context_compacted":
+            print(render_trace("context compacted", f"{payload.get('messages')} messages retained"))
     return observe
 
 
@@ -158,6 +160,19 @@ def main(argv: list[str] | None = None) -> int:
     if args.task.strip().lower() in {"/help", "help"}:
         print(render_help())
         return 0
+    if args.task.strip().startswith("/"):
+        from agent.commands import CommandRouter
+
+        reg = build_default_registry()
+        result = CommandRouter(reg).handle(args.task)
+        if result.handled:
+            if result.selfcheck:
+                return selfcheck()
+            if result.output:
+                print(result.output)
+            if result.exit:
+                print("bye.")
+            return 0
 
     # 真正跑任务：优先用 DeepSeek API；没配 key 时回退到 FakeBackend（离线打通管道）
     agent = build_agent()

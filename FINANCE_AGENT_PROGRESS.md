@@ -84,6 +84,12 @@
 ### 2026-07-07
 
 - [x] 修正 CLI 欢迎页招财猫：去掉用中文代替形象部件的文字，图形区只保留“招财进宝符”。
+- [x] 收敛 README：移除通用课程骨架叙述，明确项目是 finance-agent。
+- [x] 增加 Agent 主循环上下文保护：工具 observation 截断、长会话 compaction 和 `/think on` 可见提示。
+- [x] 增加 `FINANCE_ALLOW_SAMPLE_FALLBACK=0`，可在严肃研究时禁用样例 fallback。
+- [x] 增强 `/sources`：展示数据源 enabled/disabled 状态和缺失 token 说明。
+- [x] 支持单次 slash command：`python -m agent.cli /tools`、`python -m agent.cli /sources` 等无需进入交互模式。
+- [x] 增加 pytest 回归测试，覆盖符号归一、Provider fallback、样例 fallback 开关、路由、回测、上下文截断和 slash command。
 
 ## 已实现功能
 
@@ -146,6 +152,7 @@ export TUSHARE_TOKEN="..."
 - Tushare 需要 token 和对应接口权限；AKShare 依赖上游公开页面结构，可能随页面变化失效。
 - 回测不包含滑点、手续费、分红复权和真实成交约束，第一版只用于研究。
 - 若运行环境没有安装 `prompt_toolkit`，CLI 会回退到 `readline/input`，功能取决于终端对 readline 的支持。
+- 部分通用 starter 模块仍是课程占位实现，例如 filesystem/shell、MCP 客户端和纯文本 prompt renderer；当前产品主线是金融研究 Agent。
 
 ## 验证记录
 
@@ -187,3 +194,19 @@ CLI 输入修复验证：
 - `InteractiveInput` 在 TTY 中优先使用 `prompt_toolkit`，并维护 `~/.finance_agent_history`。
 - 非 TTY 管道输入仍保持兼容。
 - PTY 回归验证确认 prompt 不再显示 `^[[38;...` 转义乱码。
+
+2026-07-07 质量改进验证：
+
+```bash
+python -m compileall agent backend finance skills tools trace2skill tests
+python -m pytest
+python -m agent.cli --selfcheck
+python -m agent.cli /tools
+python -m agent.cli /sources
+```
+
+结果：
+- `compileall` 通过。
+- `pytest` 通过 11 个测试；本机 xonsh history 权限 warning 不影响项目测试。
+- 自检通过，当前注册 14 个工具。
+- `/tools` 和 `/sources` 可在单次命令模式运行。

@@ -682,15 +682,38 @@ class SampleDataProvider:
 class ProviderChain:
     def __init__(self, providers: list[MarketDataProvider] | None = None):
         load_local_env()
+        self.allow_sample_fallback = _env_truthy("FINANCE_ALLOW_SAMPLE_FALLBACK", default=True)
         default: list[MarketDataProvider] = []
         alpha = AlphaVantageProvider()
         tushare = TushareProvider()
+        self._default_diagnostics = [
+            {
+                "name": alpha.name,
+                "status": "enabled" if alpha.available() else "disabled",
+                "detail": "" if alpha.available() else "requires ALPHAVANTAGE_API_KEY",
+            },
+            {
+                "name": tushare.name,
+                "status": "enabled" if tushare.available() else "disabled",
+                "detail": "" if tushare.available() else "requires TUSHARE_TOKEN",
+            },
+            {"name": "AKShare", "status": "enabled", "detail": "A-share public endpoints"},
+            {"name": "Yahoo Finance public endpoints", "status": "enabled", "detail": "public endpoints may be delayed"},
+            {
+                "name": "SAMPLE_FALLBACK",
+                "status": "enabled" if self.allow_sample_fallback else "disabled",
+                "detail": "demo-only fallback" if self.allow_sample_fallback else "FINANCE_ALLOW_SAMPLE_FALLBACK=0",
+            },
+        ]
         if alpha.available():
             default.append(alpha)
         if tushare.available():
             default.append(tushare)
-        default.extend([AKShareProvider(), YahooFinanceProvider(), SampleDataProvider()])
-        self.providers = providers or default
+        default.extend([AKShareProvider(), YahooFinanceProvider()])
+        if self.allow_sample_fallback:
+            default.append(SampleDataProvider())
+        self._using_default_providers = providers is None
+        self.providers = default if providers is None else providers
 
     def get_quote(self, symbol: str) -> Quote:
         return self._first("get_quote", symbol)
@@ -715,6 +738,20 @@ class ProviderChain:
             except Exception as exc:  # noqa: BLE001 - convert provider failures to notes/fallback
                 errors.append(f"{provider.name}: {exc}")
         raise ProviderError("; ".join(errors))
+
+    def diagnostics(self) -> list[dict[str, str]]:
+        """Return provider status for CLI visibility."""
+        if self._using_default_providers:
+            return self._default_diagnostics
+        rows: list[dict[str, str]] = []
+        for provider in self.providers:
+            status = "enabled"
+            detail = ""
+            if isinstance(provider, SampleDataProvider):
+                status = "enabled" if self.allow_sample_fallback else "disabled"
+                detail = "demo-only fallback"
+            rows.append({"name": provider.name, "status": status, "detail": detail})
+        return rows
 
 
 def export_history_csv(candles: list[Candle]) -> str:
@@ -794,6 +831,13 @@ def _format_trade_date(value: str) -> str:
     if len(text) == 8 and text.isdigit():
         return f"{text[:4]}-{text[4:6]}-{text[6:]}"
     return text
+
+
+def _env_truthy(name: str, default: bool = False) -> bool:
+    value = os.environ.get(name)
+    if value is None:
+        return default
+    return value.strip().lower() not in {"0", "false", "no", "off", ""}
 
 
 def _sample_profile(symbol: str) -> dict[str, Any]:

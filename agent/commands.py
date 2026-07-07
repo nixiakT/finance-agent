@@ -166,8 +166,12 @@ class CommandRouter:
         return "已注册工具：\n" + "\n".join(f"- {name}" for name in names)
 
     def _sources(self) -> str:
-        providers = [provider.name for provider in self.finance.provider.providers]
-        return "当前数据源优先级：\n" + "\n".join(f"{index}. {name}" for index, name in enumerate(providers, start=1))
+        diagnostics = self.finance.provider.diagnostics()
+        lines = ["当前数据源状态："]
+        for index, row in enumerate(diagnostics, start=1):
+            detail = f" - {row['detail']}" if row.get("detail") else ""
+            lines.append(f"{index}. {row['name']}: {row['status']}{detail}")
+        return "\n".join(lines)
 
     def _search(self, args: list[str]) -> str:
         query = " ".join(args).strip()

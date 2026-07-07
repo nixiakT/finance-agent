@@ -9,22 +9,27 @@
       else:
           return assistant.content                                 # 最终答复
 
-Day5 你要把下面的 run() 真正实现出来（Day6 随工具集扩展完善）。骨架已给出结构与防呆上限。
+工具结果会被截断，长会话会按预算压缩，避免把上下文撑爆。
 """
 from __future__ import annotations
 from typing import Any, Callable
 
+from agent.context import maybe_compact, truncate_observation
 from tools.base import ToolRegistry
 
 
 class AgentLoop:
     def __init__(self, backend: Any, registry: ToolRegistry, system_prompt: str,
                  max_turns: int = 20,
+                 context_budget: int = 6000,
+                 max_observation_chars: int = 4000,
                  observer: Callable[[str, dict[str, Any]], None] | None = None):
         self.backend = backend
         self.registry = registry
         self.system_prompt = system_prompt
         self.max_turns = max_turns          # 防死循环：硬上限
+        self.context_budget = context_budget
+        self.max_observation_chars = max_observation_chars
         self.observer = observer
 
     def run(self, user_task: str) -> str:
@@ -36,6 +41,10 @@ class AgentLoop:
 
     def run_messages(self, messages: list[dict[str, Any]]) -> str:
         for turn in range(self.max_turns):
+            compacted = maybe_compact(messages, self.context_budget)
+            if compacted is not messages:
+                messages[:] = compacted
+                self._emit("context_compacted", {"messages": len(messages)})
             self._emit("model_start", {"turn": turn + 1})
             assistant = self.backend.chat(messages, tools=self.registry.schemas())
             self._emit("model_end", {
@@ -51,22 +60,23 @@ class AgentLoop:
             if not tool_calls:
                 return assistant.get("content", "")
 
-            # TODO[Day5] 分发并执行工具，把每个结果作为 role="tool" 注入 messages：
             for call in tool_calls:
                 tool = self.registry.get(call["name"])
                 if tool is None:
                     obs = f"错误：未知工具 {call['name']}"
                 else:
-                    # TODO[Day7] 加错误恢复（try/except，把异常文本作为 observation，让模型自我修复）
                     try:
                         self._emit("tool_start", {
                             "name": call["name"],
                             "arguments": call.get("arguments", {}),
                         })
-                        obs = tool.run(**call.get("arguments", {}))
+                        obs = truncate_observation(
+                            str(tool.run(**call.get("arguments", {}))),
+                            self.max_observation_chars,
+                        )
                         self._emit("tool_end", {
                             "name": call["name"],
-                            "preview": _preview(str(obs)),
+                            "preview": _preview(obs),
                         })
                     except Exception as exc:  # noqa: BLE001 - surface tool errors to the model/user
                         obs = f"工具 {call['name']} 执行失败：{exc}"
@@ -75,9 +85,7 @@ class AgentLoop:
                             "error": str(exc),
                         })
                 messages.append({"role": "tool", "name": call["name"],
-                                 "tool_call_id": call.get("id"), "content": str(obs)})
-
-            # TODO[Day7] 在这里做上下文管理：超出 token 预算时触发 compaction（见 agent/context.py）
+                                 "tool_call_id": call.get("id"), "content": obs})
 
         return "[达到最大轮数上限，未完成任务]"
 
