@@ -24,21 +24,40 @@ def web_search(query: str, limit: int = 5) -> str:
     if not cleaned:
         raise ValueError("query is required")
 
-    with httpx.Client(timeout=20.0, follow_redirects=True, headers=_headers()) as client:
-        response = client.get("https://html.duckduckgo.com/html/", params={"q": cleaned})
-        response.raise_for_status()
-
-    rows = _parse_duckduckgo_results(response.text, limit)
+    search_url = ""
+    search_error = ""
+    try:
+        with httpx.Client(timeout=20.0, follow_redirects=True, headers=_headers()) as client:
+            response = client.get("https://html.duckduckgo.com/html/", params={"q": cleaned})
+            search_url = str(response.url)
+            response.raise_for_status()
+        rows = _parse_duckduckgo_results(response.text, limit)
+    except httpx.HTTPStatusError as exc:
+        rows = []
+        search_error = f"搜索入口 HTTP {exc.response.status_code}: {exc.response.reason_phrase}"
+        search_url = str(exc.response.url)
+    except httpx.RequestError as exc:
+        rows = []
+        search_error = f"搜索入口连接失败: {_compact_network_error(exc)}"
+        search_url = str(exc.request.url) if exc.request else ""
     if not rows:
         rows = _finance_link_fallback(cleaned, limit)
     if not rows:
-        return "\n".join([
+        lines = [
             f"搜索: {cleaned}",
             "没有解析到搜索结果。可以尝试更具体的关键词，或直接使用 /fetch URL。",
-            f"搜索页: {response.url}",
-        ])
+        ]
+        if search_error:
+            lines.append(f"备注: {search_error}")
+        if search_url:
+            lines.append(f"搜索页: {search_url}")
+        return "\n".join(lines)
 
-    lines = [f"搜索: {cleaned}", f"来源: DuckDuckGo HTML ({response.url})"]
+    source = f"DuckDuckGo HTML ({search_url})" if not search_error else "本地财经链接 fallback"
+    lines = [f"搜索: {cleaned}", f"来源: {source}"]
+    if search_error:
+        lines.append(f"备注: {search_error}")
+        lines.append("备注: 已生成公开财经页面入口，请用 /fetch URL 或浏览器进一步核验。")
     for index, row in enumerate(rows, start=1):
         lines.append(f"{index}. {row['title']}")
         lines.append(f"   {row['url']}")
@@ -56,8 +75,16 @@ def web_fetch(url: str, max_chars: int = 4000) -> str:
     if parsed.scheme not in {"http", "https"}:
         raise ValueError("只支持 http/https URL")
 
-    with httpx.Client(timeout=20.0, follow_redirects=True, headers=_headers()) as client:
-        response = client.get(cleaned)
+    try:
+        with httpx.Client(timeout=20.0, follow_redirects=True, headers=_headers()) as client:
+            response = client.get(cleaned)
+    except httpx.RequestError as exc:
+        return "\n".join([
+            f"URL: {cleaned}",
+            f"HTTP: UNAVAILABLE",
+            f"备注: 抓取失败: {_compact_network_error(exc)}",
+            "建议: 换用 /search 生成公开财经页面入口，或稍后重试该 URL。",
+        ])
 
     content_type = response.headers.get("content-type", "")
     text = response.text
@@ -205,3 +232,10 @@ def _looks_dynamic(body: str) -> bool:
     lowered = body.lower()
     markers = ("__next_data__", "window.__", "id=\"app\"", "id=\"root\"", "data-reactroot")
     return any(marker in lowered for marker in markers)
+
+
+def _compact_network_error(exc: Exception, limit: int = 180) -> str:
+    text = " ".join(str(exc).split())
+    if len(text) <= limit:
+        return text
+    return text[:limit] + "..."

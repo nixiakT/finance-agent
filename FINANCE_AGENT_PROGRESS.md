@@ -90,6 +90,9 @@
 - [x] 增强 `/sources`：展示数据源 enabled/disabled 状态和缺失 token 说明。
 - [x] 支持单次 slash command：`python -m agent.cli /tools`、`python -m agent.cli /sources` 等无需进入交互模式。
 - [x] 增加 pytest 回归测试，覆盖符号归一、Provider fallback、样例 fallback 开关、路由、回测、上下文截断和 slash command。
+- [x] 修复网页核验失败路径：`web_search` 遇到 `No route to host` 等连接错误时返回公开财经页面 fallback，而不是让 Agent 直接放弃联网。
+- [x] 增加“今天/今日/最新/情况”市场核验路由：先网页核验，再输出行情、技术面和新闻摘要。
+- [x] 修复单次 slash command 多参数解析：`python -m agent.cli /search 智谱 02513 股票` 可直接运行。
 
 ## 已实现功能
 
@@ -119,7 +122,8 @@
 - CLI 行编辑：支持历史记录、方向键、删除键、常见 Emacs 快捷键和命令补全。
 - CLI 输入清洗：误粘贴 `finance-agent >` 前缀时会自动剥离。
 - 标的核验：自然语言包含“标的/代码/上市”等问题时，先做公开网页搜索，再做行情核验。
-- 网页工具：`web_search` 使用公开搜索结果核验来源，`web_fetch` 抓取指定 URL 并标注 WAF/JS 限制。
+- 今日市场核验：自然语言包含“今天/今日/最新/情况”等时效性问题时，先做网页核验，再输出行情、技术面和新闻摘要。
+- 网页工具：`web_search` 使用公开搜索结果核验来源；搜索入口失败时会生成公开财经页面 fallback；`web_fetch` 抓取指定 URL 并标注 WAF/JS/连接限制。
 
 ## 使用说明
 

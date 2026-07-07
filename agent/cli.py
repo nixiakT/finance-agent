@@ -149,22 +149,23 @@ def interactive() -> int:
 
 def main(argv: list[str] | None = None) -> int:
     p = argparse.ArgumentParser(prog="mini-openclaw")
-    p.add_argument("task", nargs="?", help="要让 agent 完成的任务（自然语言）")
+    p.add_argument("task", nargs="*", help="要让 agent 完成的任务（自然语言）")
     p.add_argument("--selfcheck", action="store_true", help="只做骨架自检")
     args = p.parse_args(argv)
 
     if args.selfcheck:
         return selfcheck()
-    if not args.task:
+    task = " ".join(args.task).strip()
+    if not task:
         return interactive()
-    if args.task.strip().lower() in {"/help", "help"}:
+    if task.lower() in {"/help", "help"}:
         print(render_help())
         return 0
-    if args.task.strip().startswith("/"):
+    if task.startswith("/"):
         from agent.commands import CommandRouter
 
         reg = build_default_registry()
-        result = CommandRouter(reg).handle(args.task)
+        result = CommandRouter(reg).handle(task)
         if result.handled:
             if result.selfcheck:
                 return selfcheck()
@@ -176,7 +177,7 @@ def main(argv: list[str] | None = None) -> int:
 
     # 真正跑任务：优先用 DeepSeek API；没配 key 时回退到 FakeBackend（离线打通管道）
     agent = build_agent()
-    print(agent.run(args.task))
+    print(agent.run(task))
     return 0
 
 

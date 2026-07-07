@@ -9,6 +9,7 @@ from finance.backtest import StrategyConfig, backtest_moving_average_cross, pars
 from finance.data import ProviderChain, ProviderError, SampleDataProvider
 from finance.models import Candle, Financials, NewsItem, Quote
 from finance.symbols import extract_symbols, normalize_symbol, to_yahoo_symbol
+from finance.web import web_search
 
 
 def test_symbol_normalization_handles_common_markets() -> None:
@@ -54,6 +55,35 @@ def test_route_task_selects_compare_and_backtest() -> None:
 
     assert "# 股票对比" in compare
     assert "# 策略回测结果" in backtest
+
+
+def test_route_task_selects_market_update_for_today_question(monkeypatch: pytest.MonkeyPatch) -> None:
+    import finance.agent as finance_agent
+
+    monkeypatch.setattr(finance_agent, "web_search", lambda query, limit=5: f"搜索: {query}\n来源: fallback")
+    agent = FinanceResearchAgent(provider=ProviderChain(providers=[StaticProvider()]))
+
+    output = agent.route_task("看看智谱今天的情况")
+
+    assert "# 今日市场核验" in output
+    assert "公开网页核验" in output
+    assert "02513.HK" in output
+
+
+def test_web_search_returns_finance_fallback_on_request_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    import httpx
+
+    def fail_get(self: httpx.Client, url: str, **kwargs: object) -> httpx.Response:
+        request = httpx.Request("GET", url)
+        raise httpx.ConnectError("No route to host", request=request)
+
+    monkeypatch.setattr(httpx.Client, "get", fail_get)
+
+    output = web_search("智谱 02513 股票", 5)
+
+    assert "搜索入口连接失败" in output
+    assert "本地财经链接 fallback" in output
+    assert "https://xueqiu.com/S/02513" in output
 
 
 def test_parse_strategy_and_backtest_return_metrics() -> None:

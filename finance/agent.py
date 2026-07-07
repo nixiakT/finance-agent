@@ -182,6 +182,8 @@ class FinanceResearchAgent:
             symbols = ["AAPL"]
         lowered = task.lower()
         period = _extract_period(task)
+        if _is_market_update_task(task):
+            return self.market_update_task(task, symbols[0])
         if any(word in task for word in ("标的", "代码", "上市", "是不是上市", "已经上市")):
             return self.verify_symbol_task(task, symbols[0])
         if any(word in task for word in ("回测", "策略")) or "backtest" in lowered:
@@ -212,6 +214,33 @@ class FinanceResearchAgent:
         ]
         return "\n".join(parts)
 
+    def market_update_task(self, task: str, symbol: str) -> str:
+        """Return a source-first market update for today's/latest status questions."""
+        normalized = normalize_symbol(symbol)
+        query = _verification_query(task, normalized)
+        parts = [
+            "# 今日市场核验",
+            "",
+            f"- 识别标的: {normalized}",
+            "",
+            "## 公开网页核验",
+            web_search(query, 5),
+            "",
+            "## 行情快照",
+            self.get_quote(normalized),
+            "",
+            "## 近期技术面",
+            self.calculate_indicators(normalized, "3mo"),
+            "",
+            "## 新闻摘要",
+            self.get_news(normalized, 5),
+            "",
+            "## 边界",
+            "- 以上只做研究核验，不构成买卖建议。",
+            "- 若网页搜索入口失败，请优先使用返回的公开财经页面链接或 /fetch URL 交叉验证。",
+        ]
+        return "\n".join(parts)
+
 
 def _coerce_symbols(symbols: list[str] | str) -> list[str]:
     if isinstance(symbols, str):
@@ -236,6 +265,10 @@ def _extract_period(task: str) -> str:
     if any(token in task for token in ("五年", "5年", "过去五年")) or "5y" in lowered:
         return "5y"
     return ""
+
+
+def _is_market_update_task(task: str) -> bool:
+    return any(token in task for token in ("今天", "今日", "当天", "现在", "最新", "情况", "怎么了"))
 
 
 def _compact_error(exc: Exception, limit: int = 220) -> str:

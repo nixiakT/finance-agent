@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from typing import Any
 
+import pytest
+
 from agent.cli import main
 from agent.commands import CommandRouter
 from agent.context import maybe_compact, truncate_observation
@@ -72,6 +74,19 @@ def test_main_handles_single_shot_slash_command(capsys: Any) -> None:
 
     assert "已注册工具" in output
     assert "finance_get_quote" in output
+
+
+def test_main_handles_single_shot_slash_command_with_args(capsys: Any, monkeypatch: pytest.MonkeyPatch) -> None:
+    import agent.commands as commands
+
+    monkeypatch.setattr(commands, "web_search", lambda query, limit=5: f"搜索: {query}\nlimit={limit}")
+
+    assert main(["/search", "智谱", "02513", "股票"]) == 0
+
+    output = capsys.readouterr().out
+
+    assert "搜索: 智谱 02513 股票" in output
+    assert "02513" in output
 
 
 class ToolThenAnswerBackend:
