@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from typing import Callable
 
 from finance.agent import FinanceResearchAgent
+from finance.data import ProviderError
 from finance.web import web_fetch, web_search
 from tools.base import ToolRegistry
 
@@ -84,6 +85,8 @@ class CommandRouter:
                 return CommandResult(True, finance_commands[command](args))
             except ValueError as exc:
                 return CommandResult(True, str(exc))
+            except ProviderError as exc:
+                return CommandResult(True, f"数据获取失败：{_preview(str(exc), 360)}")
         return CommandResult(True, f"未知命令：{command}\n输入 /help 查看可用命令。")
 
     def _quote(self, args: list[str]) -> str:

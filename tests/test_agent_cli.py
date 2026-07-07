@@ -8,6 +8,7 @@ from agent.cli import main
 from agent.commands import CommandRouter
 from agent.context import maybe_compact, truncate_observation
 from agent.loop import AgentLoop
+from finance.data import ProviderError
 from tools.base import Tool, ToolRegistry
 
 
@@ -65,6 +66,19 @@ def test_sources_command_reports_provider_status() -> None:
     output = router.handle("/sources").output
 
     assert "TEST: enabled - unit test" in output
+
+
+def test_finance_command_surfaces_provider_error_without_traceback() -> None:
+    class Finance:
+        def get_quote(self, symbol: str) -> str:
+            raise ProviderError("not found")
+
+    router = CommandRouter(ToolRegistry(), finance_agent=Finance())  # type: ignore[arg-type]
+
+    output = router.handle("/quote UNKNOWNXYZ").output
+
+    assert "数据获取失败" in output
+    assert "not found" in output
 
 
 def test_main_handles_single_shot_slash_command(capsys: Any) -> None:

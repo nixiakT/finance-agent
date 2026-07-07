@@ -8,7 +8,7 @@ from __future__ import annotations
 import csv
 import math
 import os
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from io import StringIO
 from typing import Any, Protocol
 
@@ -193,9 +193,9 @@ class YahooFinanceProvider:
         as_of = utc_now_iso()
         is_realtime = True
         if timestamp:
-            as_of_dt = datetime.utcfromtimestamp(timestamp[-1]).replace(microsecond=0)
-            as_of = as_of_dt.isoformat() + "Z"
-            is_realtime = datetime.utcnow() - as_of_dt <= timedelta(hours=36)
+            as_of_dt = datetime.fromtimestamp(timestamp[-1], UTC).replace(microsecond=0)
+            as_of = as_of_dt.isoformat().replace("+00:00", "Z")
+            is_realtime = datetime.now(UTC) - as_of_dt <= timedelta(hours=36)
         notes = ["Yahoo public endpoints may be delayed or rate limited."]
         if query_symbol != normalized:
             notes.append(f"Yahoo 查询代码: {query_symbol}；展示代码按常见港股页面保留为 {normalized}。")
@@ -224,7 +224,7 @@ class YahooFinanceProvider:
         candles: list[Candle] = []
         for index, ts in enumerate(timestamps):
             candles.append(Candle(
-                date=datetime.utcfromtimestamp(ts).date().isoformat(),
+                date=datetime.fromtimestamp(ts, UTC).date().isoformat(),
                 open=_list_float(quote_rows.get("open"), index),
                 high=_list_float(quote_rows.get("high"), index),
                 low=_list_float(quote_rows.get("low"), index),
@@ -275,26 +275,36 @@ class YahooFinanceProvider:
     def get_news(self, symbol: str, limit: int = 5) -> list[NewsItem]:
         normalized = normalize_symbol(symbol)
         query_symbol = to_yahoo_symbol(normalized)
+        quote_name = ""
+        try:
+            quote_name = self.get_quote(normalized).name
+        except Exception:
+            quote_name = ""
         response = self.client.get(
             "https://query2.finance.yahoo.com/v1/finance/search",
-            params={"q": query_symbol, "quotesCount": "1", "newsCount": str(limit)},
+            params={"q": query_symbol, "quotesCount": "1", "newsCount": str(max(limit * 4, 10))},
         )
         response.raise_for_status()
         data = response.json()
         items: list[NewsItem] = []
-        for row in (data.get("news") or [])[:limit]:
+        keywords = _news_keywords(normalized, query_symbol, quote_name)
+        for row in data.get("news") or []:
+            if not _news_matches(row, keywords):
+                continue
             published = row.get("providerPublishTime")
             items.append(NewsItem(
                 title=row.get("title", ""),
                 publisher=row.get("publisher", ""),
                 link=row.get("link", ""),
                 published_at=(
-                    datetime.utcfromtimestamp(published).replace(microsecond=0).isoformat() + "Z"
+                    datetime.fromtimestamp(published, UTC).replace(microsecond=0).isoformat().replace("+00:00", "Z")
                     if published else ""
                 ),
                 summary=row.get("summary", ""),
                 source=self.name,
             ))
+            if len(items) >= limit:
+                break
         return items
 
     def _yfinance_info(self, query_symbol: str) -> dict[str, Any]:
@@ -614,7 +624,7 @@ class SampleDataProvider:
         trend = profile["trend"]
         volatility = profile["volatility"]
         candles: list[Candle] = []
-        start = datetime.utcnow().date() - timedelta(days=days * 7 // 5 + 10)
+        start = datetime.now(UTC).date() - timedelta(days=days * 7 // 5 + 10)
         trading_day = 0
         current = start
         while len(candles) < days:
@@ -805,6 +815,32 @@ def _list_int(values: list[Any] | None, index: int) -> int | None:
     return _to_int(values[index])
 
 
+def _news_keywords(normalized: str, query_symbol: str, quote_name: str = "") -> list[str]:
+    raw = [
+        normalized,
+        query_symbol,
+        normalized.split(".", 1)[0],
+        query_symbol.split(".", 1)[0],
+        quote_name,
+    ]
+    if normalized.endswith(".HK"):
+        raw.append(normalized[:-3].lstrip("0") or normalized[:-3])
+    for part in quote_name.replace(",", " ").replace(".", " ").split():
+        if len(part) >= 4:
+            raw.append(part)
+    keywords: list[str] = []
+    for value in raw:
+        cleaned = str(value).strip().lower()
+        if cleaned and cleaned not in keywords:
+            keywords.append(cleaned)
+    return keywords
+
+
+def _news_matches(row: dict[str, Any], keywords: list[str]) -> bool:
+    haystack = " ".join(str(row.get(key, "")) for key in ("title", "summary", "link", "publisher")).lower()
+    return any(keyword in haystack for keyword in keywords)
+
+
 def _period_to_days(period: str) -> int:
     normalized = period.lower().strip()
     table = {"1mo": 22, "3mo": 66, "6mo": 126, "1y": 252, "2y": 504, "5y": 1260}
@@ -821,7 +857,7 @@ def _trim_period(candles: list[Candle], period: str) -> list[Candle]:
 
 
 def _date_window(period: str) -> tuple[str, str]:
-    end = datetime.utcnow().date()
+    end = datetime.now(UTC).date()
     start = end - timedelta(days=_period_to_days(period) * 7 // 5 + 10)
     return start.strftime("%Y%m%d"), end.strftime("%Y%m%d")
 

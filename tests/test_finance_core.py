@@ -5,9 +5,10 @@ from datetime import date, timedelta
 import pytest
 
 from finance.agent import FinanceResearchAgent
-from finance.backtest import StrategyConfig, backtest_moving_average_cross, parse_strategy
-from finance.data import ProviderChain, ProviderError, SampleDataProvider
-from finance.models import Candle, Financials, NewsItem, Quote
+from finance.backtest import StrategyConfig, backtest_moving_average_cross, format_backtest, parse_strategy
+from finance.data import ProviderChain, ProviderError, SampleDataProvider, _news_matches
+from finance.models import Candle, Financials, NewsItem, Quote, StockSnapshot, utc_now_iso
+from finance.report import render_stock_report
 from finance.symbols import extract_symbols, normalize_symbol, to_yahoo_symbol
 from finance.web import web_search
 
@@ -97,6 +98,48 @@ def test_parse_strategy_and_backtest_return_metrics() -> None:
     assert result["strategy"] == "moving_average_cross"
     assert result["initial_cash"] == 50_000
     assert "total_return_pct" in result
+
+
+def test_parse_strategy_notes_reordered_windows() -> None:
+    config = parse_strategy("60 日均线上穿 20 日均线")
+    result = backtest_moving_average_cross(rising_candles(90), config)
+    output = format_backtest(result)
+
+    assert config.fast_window == 20
+    assert config.slow_window == 60
+    assert "已规范化为快线 MA20、慢线 MA60" in output
+    assert output.count("已规范化为快线 MA20、慢线 MA60") == 1
+
+
+def test_news_filter_rejects_unrelated_titles() -> None:
+    keywords = ["aapl", "apple"]
+
+    assert _news_matches({"title": "Apple unveils new services"}, keywords)
+    assert not _news_matches({"title": "Why Intel stock is up today"}, keywords)
+
+
+def test_report_skips_framework_scoring_for_sample_financials() -> None:
+    snapshot = StockSnapshot(
+        symbol="AAPL",
+        quote=Quote(symbol="AAPL", source="Yahoo Finance public endpoints", as_of=utc_now_iso(), price=100),
+        history=[],
+        financials=Financials(symbol="AAPL", source="SAMPLE_FALLBACK", as_of=utc_now_iso(), pe_ratio=20),
+        news=[],
+        indicators={},
+        fetched_at=utc_now_iso(),
+    )
+
+    output = render_stock_report(snapshot)
+
+    assert "暂不对护城河、现金流、安全边际等框架打分" in output
+    assert "评分" not in output
+
+
+def test_utc_now_iso_uses_z_suffix() -> None:
+    value = utc_now_iso()
+
+    assert value.endswith("Z")
+    assert "+00:00" not in value
 
 
 class FailingProvider:

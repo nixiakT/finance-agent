@@ -18,6 +18,7 @@ class StrategyConfig:
     slow_window: int = 60
     exit_window: int | None = 20
     initial_cash: float = 100_000.0
+    notes: list[str] | None = None
 
 
 def parse_strategy(text: str | None = None, **overrides: Any) -> StrategyConfig:
@@ -25,6 +26,9 @@ def parse_strategy(text: str | None = None, **overrides: Any) -> StrategyConfig:
     if text:
         numbers = [int(x) for x in re.findall(r"\d+", text)]
         if len(numbers) >= 2:
+            if numbers[0] > numbers[1]:
+                config.notes = config.notes or []
+                config.notes.append(f"输入窗口 MA{numbers[0]}/MA{numbers[1]} 已规范化为快线 MA{numbers[1]}、慢线 MA{numbers[0]}。")
             config.fast_window = min(numbers[0], numbers[1])
             config.slow_window = max(numbers[0], numbers[1])
         elif len(numbers) == 1:
@@ -36,9 +40,15 @@ def parse_strategy(text: str | None = None, **overrides: Any) -> StrategyConfig:
         if value is not None and hasattr(config, key):
             setattr(config, key, value)
     if config.fast_window >= config.slow_window:
-        config.fast_window, config.slow_window = min(config.fast_window, config.slow_window), max(
-            config.fast_window, config.slow_window + 1
-        )
+        original_fast, original_slow = config.fast_window, config.slow_window
+        config.fast_window = min(original_fast, original_slow)
+        config.slow_window = max(original_fast, original_slow)
+        if config.fast_window == config.slow_window:
+            config.slow_window = config.fast_window + 1
+        config.notes = config.notes or []
+        config.notes.append(f"输入窗口 MA{original_fast}/MA{original_slow} 已规范化为快线 MA{config.fast_window}、慢线 MA{config.slow_window}。")
+    if config.notes:
+        config.notes = list(dict.fromkeys(config.notes))
     return config
 
 
@@ -86,6 +96,7 @@ def backtest_moving_average_cross(candles: list[Candle], config: StrategyConfig)
         "latest_position": "持有" if frame["position"].iloc[-1] > 0 else "空仓",
         "trade_log": trades[-10:],
         "assumptions": [
+            *(config.notes or []),
             "使用收盘价信号，下一交易日持仓生效。",
             "未计入交易手续费、滑点、税费、分红和融资成本。",
             "结果仅用于研究，不代表未来收益。",

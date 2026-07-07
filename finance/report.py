@@ -11,7 +11,7 @@ from .models import Financials, NewsItem, Quote, StockSnapshot
 def render_stock_report(snapshot: StockSnapshot) -> str:
     quote = snapshot.quote
     financials = snapshot.financials
-    frameworks = evaluate_frameworks(quote, financials, snapshot.indicators)
+    frameworks = [] if _low_confidence_financials(financials) else evaluate_frameworks(quote, financials, snapshot.indicators)
     conclusion = _conclusion(quote, financials, snapshot.indicators)
 
     sections = [
@@ -41,7 +41,7 @@ def render_stock_report(snapshot: StockSnapshot) -> str:
         _format_news(snapshot.news),
         "",
         "## 投资大师框架蒸馏",
-        format_framework_results(frameworks),
+        _format_framework_section(frameworks, financials),
         "",
         "## 主要风险",
         _risk_summary(quote, financials, snapshot.indicators, snapshot.news),
@@ -153,6 +153,19 @@ def _format_news(news: list[NewsItem]) -> str:
         if item.link:
             lines.append(f"  链接: {item.link}")
     return "\n".join(lines)
+
+
+def _format_framework_section(results: list[Any], financials: Financials) -> str:
+    if _low_confidence_financials(financials):
+        return "\n".join([
+            "- 基本面数据来自样例 fallback 或不可用，暂不对护城河、现金流、安全边际等框架打分。",
+            "- 需要先补齐真实财报、公告、审计口径和管理层信息，再做巴菲特/段永平/达利欧框架评估。",
+        ])
+    return format_framework_results(results)
+
+
+def _low_confidence_financials(financials: Financials) -> bool:
+    return financials.source in {"SAMPLE_FALLBACK", "UNAVAILABLE", ""}
 
 
 def _risk_summary(quote: Quote, financials: Financials, indicators: dict[str, Any], news: list[NewsItem]) -> str:

@@ -118,7 +118,10 @@ class FinanceResearchAgent:
         try:
             news = self.provider.get_news(normalized, limit)
         except Exception as exc:
-            return f"{normalized}: 新闻获取失败: {_compact_error(exc)}"
+            error = _compact_error(exc)
+            if "empty result" in error:
+                return f"{normalized}: 未找到与该标的强相关的新闻；新闻接口可能返回了噪声或被过滤。"
+            return f"{normalized}: 新闻获取失败: {error}"
         if not news:
             return f"{normalized}: 暂无新闻数据。"
         lines = [f"{normalized} 新闻:"]
