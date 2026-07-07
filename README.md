@@ -38,6 +38,8 @@ finance-agent > 分析一下 AAPL 最近三个月走势
 finance-agent > /think off
 finance-agent > /proxy test
 finance-agent > /quote AAPL
+finance-agent > /wechat status
+finance-agent > /memory add 以后港股报告要同时说明展示代码和 Yahoo 查询代码
 finance-agent > /search 智谱 02513 股票
 finance-agent > /fetch https://xueqiu.com/S/02513
 finance-agent > /exit
@@ -60,6 +62,9 @@ python -m agent.cli "生成我的自选股每日简报：AAPL, MSFT, NVDA"
 /lang zh | /lang en          切换 CLI 交互语言
 /status                      查看模型、数据源、工具数、thinking 状态和 License
 /proxy status/test/set/off   查看、测试、临时设置或关闭网页/行情查询代理
+/wechat status/send/send-md  查看微信连接状态，或发送报告到微信/本地 outbox
+/memory list/add             查看或新增金融研究偏好、纠错和风险规则
+/evolve <复盘/纠错/轨迹>       把金融经验沉淀为 memory 和 Skill
 /mcp                         查看已接入 MCP 工具
 /security                    查看权限分层和注入防护策略
 /resolve minimax             解析公司名/简称到 A 股、港股、美股候选代码
@@ -113,6 +118,33 @@ FINANCE_AGENT_LANG=en python -m agent.cli /help
 /lang en
 ```
 
+## 微信连接与自进化
+
+微信连接采用适配器模式：
+
+- 默认 `dry-run`：不会发网络请求，消息写入 `.finance_agent/wechat_outbox/`，方便本地验证。
+- 企业微信/微信群机器人：配置 `FINANCE_WECHAT_WEBHOOK` 后，`/wechat send` 会调用 webhook。
+- 本地 relay：配置 `FINANCE_WECHAT_RELAY_URL` 后，可对接 WeChaty、个人微信桥接器或你自己的消息服务。
+
+```bash
+FINANCE_WECHAT_MODE=dry-run
+# FINANCE_WECHAT_WEBHOOK=<paste-full-wecom-webhook-url-in-.env.local>
+# FINANCE_WECHAT_RELAY_URL=http://127.0.0.1:8765/wechat/send
+```
+
+常用命令：
+
+```text
+/wechat status
+/wechat send 今天的自选股简报已生成
+/wechat send-md # AAPL 研究摘要
+/memory add 以后回答 SpaceX 先解析 SPCX 并核验行情，不能用旧知识判断未上市
+/memory list
+/evolve SpaceX 查询必须先解析 SPCX，再核验公开网页、行情和新闻来源
+```
+
+金融自进化会把偏好、纠错、数据源经验和风险规则写入 `.finance_agent/finance_memory.jsonl`。核心 `skills/finance-research-evolution/SKILL.md` 保持稳定；如果确实需要生成新的专用 Skill，可以通过底层 `finance_evolve_from_trace` 指定独立 `skill_name`。本地 memory 目录已被 git 忽略；写入 Skill 前会脱敏常见 key/token/cookie。
+
 ## Configuration
 
 没有配置 `DEEPSEEK_API_KEY` 时，系统会使用 `FakeBackend`，并把金融任务路由到本地 `finance_route_task`，方便离线演示。配置真模型后，Agent 会使用 OpenAI-compatible chat completions 接口选择工具和组织答案。
@@ -134,6 +166,9 @@ TUSHARE_TOKEN=...
 FINANCE_ALLOW_SAMPLE_FALLBACK=1
 FINANCE_HTTP_PROXY=http://127.0.0.1:7897
 FINANCE_AGENT_LANG=zh
+FINANCE_WECHAT_MODE=dry-run
+# FINANCE_WECHAT_WEBHOOK=...
+# FINANCE_WECHAT_RELAY_URL=...
 ```
 
 `.env.local` 已被 `.gitignore` 忽略。不要把 API key、token、cookie 写进代码或文档。
@@ -186,6 +221,7 @@ Useful commands:
 ```text
 /lang en
 /proxy test
+/wechat status
 /resolve SpaceX
 /quote SPCX
 /report AAPL 1y
@@ -209,7 +245,7 @@ MIT，见 [LICENSE](LICENSE)。
 ## 开发验证
 
 ```bash
-python -m compileall agent backend finance skills tools trace2skill
+python -m compileall agent backend finance mcp skills tools trace2skill wechat tests
 python -m agent.cli --selfcheck
 python -m pytest
 ```

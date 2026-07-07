@@ -11,6 +11,7 @@ from agent.context import maybe_compact, truncate_observation
 from agent.loop import AgentLoop
 from agent.ui import render_trace
 from finance.data import ProviderError
+from finance.evolution import add_memory, extract_learning, list_memories
 from tools.base import Tool, ToolRegistry
 from tools.fs import read_tool, write_tool
 from tools.more_tools import edit_tool, glob_tool, grep_tool
@@ -178,6 +179,53 @@ def test_lang_command_switches_cli_language(monkeypatch: pytest.MonkeyPatch) -> 
     assert "语言已切换为中文" in router.handle("/lang zh").output
 
 
+def test_wechat_command_uses_dry_run_outbox(tmp_path: Any, monkeypatch: pytest.MonkeyPatch) -> None:
+    import wechat.connector as connector
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("FINANCE_WECHAT_WEBHOOK", raising=False)
+    monkeypatch.delenv("FINANCE_WECHAT_RELAY_URL", raising=False)
+    monkeypatch.setenv("FINANCE_WECHAT_MODE", "dry-run")
+    monkeypatch.setattr(connector, "OUTBOX_DIR", tmp_path / ".finance_agent" / "wechat_outbox")
+
+    router = CommandRouter(ToolRegistry(), finance_agent=StatusFinance())  # type: ignore[arg-type]
+    output = router.handle("/wechat send hello").output
+
+    assert "status: queued" in output
+    assert list((tmp_path / ".finance_agent" / "wechat_outbox").glob("*.json"))
+
+
+def test_memory_command_adds_finance_memory(tmp_path: Any, monkeypatch: pytest.MonkeyPatch) -> None:
+    import finance.evolution as evolution
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(evolution, "MEMORY_PATH", tmp_path / ".finance_agent" / "finance_memory.jsonl")
+    monkeypatch.setattr("agent.commands.add_memory", evolution.add_memory)
+    monkeypatch.setattr("agent.commands.render_memories", evolution.render_memories)
+
+    router = CommandRouter(ToolRegistry(), finance_agent=StatusFinance())  # type: ignore[arg-type]
+    added = router.handle("/memory add 以后 SpaceX 先核验 SPCX").output
+    listed = router.handle("/memory list").output
+
+    assert "已写入金融记忆" in added
+    assert "SpaceX" in listed
+
+
+def test_evolve_command_keeps_core_skill_stable(tmp_path: Any, monkeypatch: pytest.MonkeyPatch) -> None:
+    import finance.evolution as evolution
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(evolution, "MEMORY_PATH", tmp_path / ".finance_agent" / "finance_memory.jsonl")
+    monkeypatch.setattr("agent.commands.add_memory", evolution.add_memory)
+
+    router = CommandRouter(ToolRegistry(), finance_agent=StatusFinance())  # type: ignore[arg-type]
+    output = router.handle("/evolve SpaceX 查询必须先解析 SPCX").output
+
+    assert "core finance-research-evolution remains stable" in output
+    assert "SPCX" in output
+    assert not (tmp_path / "skills" / "finance-research-evolution" / "SKILL.md").exists()
+
+
 def test_resolve_command_uses_finance_resolver() -> None:
     class Finance:
         def resolve_symbol(self, query: str) -> str:
@@ -268,6 +316,25 @@ def test_main_routes_natural_finance_task_deterministically(capsys: Any, monkeyp
 def test_finance_task_router_does_not_capture_general_dev_tasks() -> None:
     assert _should_route_finance("SpaceX 最近情况如何")
     assert not _should_route_finance("open README and replace a heading")
+
+
+def test_finance_memory_sanitizes_secrets(tmp_path: Any) -> None:
+    path = tmp_path / "memory.jsonl"
+
+    add_memory("password=demo-password-value 以后不要用样例数据", path=path)
+    rows = list_memories(path=path)
+
+    assert rows
+    assert "demo-password-value" not in rows[0]["content"]
+    assert "[REDACTED_SECRET]" in rows[0]["content"]
+
+
+def test_extract_learning_captures_finance_pitfalls() -> None:
+    learning = extract_learning("SpaceX 查询 No route to host SAMPLE_FALLBACK")
+
+    assert "SPCX" in learning
+    assert "SAMPLE_FALLBACK" in learning
+    assert "代理" in learning
 
 
 class ToolThenAnswerBackend:

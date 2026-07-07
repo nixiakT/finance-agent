@@ -10,11 +10,13 @@ from urllib.parse import urlsplit
 
 from finance.agent import FinanceResearchAgent
 from finance.data import ProviderError
+from finance.evolution import add_memory, extract_learning, render_memories
 from finance.http import proxy_label, test_connectivity
 from finance.web import web_fetch, web_search
 from agent.ui import current_lang
 from tools.security import safety_summary
 from tools.base import ToolRegistry
+from wechat import connector_status, send_markdown, send_text
 
 
 @dataclass
@@ -71,6 +73,12 @@ class CommandRouter:
             return CommandResult(True, self._mcp())
         if command == "/proxy":
             return CommandResult(True, self._proxy(args))
+        if command == "/wechat":
+            return CommandResult(True, self._wechat(args))
+        if command == "/memory":
+            return CommandResult(True, self._memory(args))
+        if command == "/evolve":
+            return CommandResult(True, self._evolve(args))
         if command == "/sources":
             return CommandResult(True, self._sources())
         if command == "/search":
@@ -213,6 +221,7 @@ class CommandRouter:
                 f"- Tools: {len(self.registry)}",
                 f"- MCP tools: {', '.join(self._mcp_tool_names()) or 'not connected'}",
                 f"- Proxy: {proxy_label()}",
+                f"- WeChat: {_wechat_mode_label()}",
                 f"- thinking: {'on' if think_enabled else 'off'} (default on; shows time/elapsed/tool summaries)",
                 f"- Data sources: {', '.join(enabled_sources) if enabled_sources else 'no real source enabled'}",
                 "- License: MIT",
@@ -225,6 +234,7 @@ class CommandRouter:
             f"- 工具数: {len(self.registry)}",
             f"- MCP 工具: {', '.join(self._mcp_tool_names()) or '未接入'}",
             f"- Proxy: {proxy_label()}",
+            f"- WeChat: {_wechat_mode_label()}",
             f"- thinking: {'on' if think_enabled else 'off'}（默认 on，展示时间/耗时/工具摘要）",
             f"- 数据源: {', '.join(enabled_sources) if enabled_sources else '无可用真实数据源'}",
             "- License: MIT",
@@ -270,6 +280,68 @@ class CommandRouter:
             "Usage: /proxy status | /proxy test [url] | /proxy set http://127.0.0.1:7897 | /proxy off",
             "用法：/proxy status | /proxy test [url] | /proxy set http://127.0.0.1:7897 | /proxy off",
         )
+
+    def _wechat(self, args: list[str]) -> str:
+        if not args or args[0].lower() in {"status", "show"}:
+            self._trace_tool("wechat_status", {})
+            return self._with_result_trace("wechat_status", connector_status())
+        action = args[0].lower()
+        if action == "send":
+            content = " ".join(args[1:]).strip()
+            if not content:
+                return _msg(
+                    "Usage: /wechat send <message>",
+                    "用法：/wechat send <要发送的内容>",
+                )
+            self._trace_tool("wechat_send", {"msgtype": "text", "content": content})
+            return self._with_result_trace("wechat_send", send_text(content).render())
+        if action == "send-md":
+            content = " ".join(args[1:]).strip()
+            if not content:
+                return _msg(
+                    "Usage: /wechat send-md <markdown>",
+                    "用法：/wechat send-md <markdown 内容>",
+                )
+            self._trace_tool("wechat_send", {"msgtype": "markdown", "content": content})
+            return self._with_result_trace("wechat_send", send_markdown(content).render())
+        return _msg(
+            "Usage: /wechat status | /wechat send <message> | /wechat send-md <markdown>",
+            "用法：/wechat status | /wechat send <内容> | /wechat send-md <markdown>",
+        )
+
+    def _memory(self, args: list[str]) -> str:
+        if not args or args[0].lower() in {"list", "show"}:
+            limit = int(args[1]) if len(args) > 1 and args[1].isdigit() else 20
+            self._trace_tool("finance_memory_list", {"limit": limit})
+            return self._with_result_trace("finance_memory_list", render_memories(limit))
+        action = args[0].lower()
+        if action == "add":
+            content = " ".join(args[1:]).strip()
+            if not content:
+                return _msg("Usage: /memory add <note>", "用法：/memory add <记忆内容>")
+            self._trace_tool("finance_memory_add", {"category": "preference", "content": content})
+            path = add_memory(content, category="preference", source="cli")
+            return self._with_result_trace("finance_memory_add", f"已写入金融记忆: {path}")
+        return _msg("Usage: /memory list [limit] | /memory add <note>", "用法：/memory list [条数] | /memory add <记忆内容>")
+
+    def _evolve(self, args: list[str]) -> str:
+        text = " ".join(args).strip()
+        if not text:
+            return _msg(
+                "Usage: /evolve <finance correction, workflow, or task trace>",
+                "用法：/evolve <金融纠错、流程经验或任务轨迹>",
+            )
+        learning = extract_learning(task=text)
+        self._trace_tool("finance_evolve_from_trace", {"task": text})
+        add_memory(learning, category="workflow", source="cli-evolve", confidence="high")
+        output = "\n".join([
+            "Finance evolution completed.",
+            "- memory: .finance_agent/finance_memory.jsonl",
+            "- skill: unchanged (core finance-research-evolution remains stable)",
+            "",
+            learning,
+        ])
+        return self._with_result_trace("finance_evolve_from_trace", output)
 
     def _sources(self) -> str:
         diagnostics = self.finance.provider.diagnostics()
@@ -373,3 +445,12 @@ def _safe_base_url(value: str) -> str:
 
 def _msg(en: str, zh: str) -> str:
     return en if current_lang() == "en" else zh
+
+
+def _wechat_mode_label() -> str:
+    mode = os.environ.get("FINANCE_WECHAT_MODE", "").strip() or "auto"
+    if os.environ.get("FINANCE_WECHAT_WEBHOOK"):
+        return f"{mode}/webhook"
+    if os.environ.get("FINANCE_WECHAT_RELAY_URL"):
+        return f"{mode}/relay"
+    return "dry-run"

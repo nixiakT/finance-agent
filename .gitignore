@@ -8,6 +8,7 @@ out-*/
 *.zip
 .DS_Store
 .agent_task_list
+.finance_agent/
 .env
 .env.*
 !.env.example

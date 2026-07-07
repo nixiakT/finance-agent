@@ -59,12 +59,14 @@ class ToolRegistry:
 def build_default_registry() -> ToolRegistry:
     """组装内置工具。随课程推进逐步取消注释。"""
     reg = ToolRegistry()
+    from .evolution_tools import evolution_tools
     from .finance_tools import finance_tools
     from .fs import read_tool, write_tool
     from .more_tools import edit_tool, glob_tool, grep_tool, task_list_tool
     from .shell import bash_tool
     from .trace2skill_tools import trace2skill_tools
     from .web_tools import web_tools
+    from .wechat_tools import wechat_tools
 
     for tool in [
         read_tool,
@@ -75,8 +77,10 @@ def build_default_registry() -> ToolRegistry:
         glob_tool,
         task_list_tool,
         *finance_tools,
+        *evolution_tools,
         *trace2skill_tools,
         *web_tools,
+        *wechat_tools,
     ]:
         reg.register(tool)
 

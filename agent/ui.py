@@ -42,6 +42,8 @@ PANEL_ROWS = [
     ("agents", "debate, risk, value, macro"),
     ("strategy", "backtest, brief, trace2skill"),
     ("web", "search, fetch, source check"),
+    ("wechat", "status, send, report outbox"),
+    ("memory", "preference, correction, evolve"),
     ("", ""),
     ("Market Sources", ""),
     ("quotes", "Yahoo Finance, Alpha Vantage"),
@@ -73,6 +75,12 @@ finance-agent 功能菜单
     显示模型、base URL、工具数、数据源、thinking 状态和 License。
   /proxy status | /proxy test | /proxy set http://127.0.0.1:7897 | /proxy off
     查看、测试、临时设置或关闭网页/行情查询代理。
+  /wechat status | /wechat send <内容> | /wechat send-md <markdown>
+    查看微信连接状态，或把报告/简报发送到微信连接器。未配置 webhook 时写入本地 outbox。
+  /memory list | /memory add <内容>
+    查看或新增金融研究偏好、纠错、数据源经验和风险规则。
+  /evolve <复盘/纠错/成功轨迹>
+    把金融研究经验沉淀为本地 memory，并更新 finance-research-evolution Skill。
   /mcp
     显示已透明并入主循环的 MCP 工具。
   /security
@@ -165,6 +173,10 @@ finance-agent 功能菜单
 Trace2Skill 自进化：
   可把成功任务轨迹沉淀成新的 skills/<name>/SKILL.md。
 
+Finance Memory 自进化：
+  /memory add 以后分析港股先核验展示代码和 Yahoo 查询代码差异
+  /evolve SpaceX 查询必须先解析 SPCX，再核验行情和新闻，不能用旧知识判断未上市
+
 研究质量门禁：
   - 信息丰富度 A/B/C
   - 数据完整性和来源风险
@@ -194,6 +206,12 @@ Basics:
     Show model, base URL, proxy, tool count, data sources, thinking state and License.
   /proxy status | /proxy test | /proxy set http://127.0.0.1:7897 | /proxy off
     Inspect, test or set the HTTP proxy used by market/web lookup calls.
+  /wechat status | /wechat send <message> | /wechat send-md <markdown>
+    Inspect the WeChat connector or send reports. Without a webhook it writes to a local outbox.
+  /memory list | /memory add <note>
+    Inspect or add finance preferences, corrections, source notes and risk rules.
+  /evolve <review/correction/trace>
+    Save finance learning to memory and update the finance-research-evolution Skill.
   /mcp
     Show MCP tools merged into the agent loop.
   /security
@@ -230,6 +248,8 @@ Research commands:
     Public web verification.
   /fetch https://example.com
     Fetch a URL and summarize it.
+  /wechat send-md # AAPL brief
+    Send a report to the configured connector or local outbox.
 
 Boundary:
   Research only. No auto trading, no return promises, no deterministic buy/sell instructions.

@@ -116,6 +116,8 @@
 - [x] 修复 SpaceX 最新上市核验路径：`SpaceX` 解析为 `SPCX`，市场更新增加“上市状态与代码核验”段落。
 - [x] CLI 支持中英文切换：`FINANCE_AGENT_LANG=zh|en` 和 `/lang zh|en`；README 增加 English Quick Start。
 - [x] 单次和交互自然语言金融查询优先走确定性 `finance_route_task`，防止新上市/改名标的被模型旧知识误判；普通开发任务仍走 ReAct 主循环。
+- [x] 增加微信连接适配器：默认 dry-run outbox，支持企业微信 webhook 和本地 HTTP relay。
+- [x] 增加金融自进化 memory：保存偏好、纠错、数据源经验、风险规则，并支持从轨迹更新 `finance-research-evolution` Skill。
 
 ## 已实现功能
 
@@ -138,6 +140,8 @@
 - 确定性金融路由：配置真模型时，自然语言金融查询也会先走 `finance_route_task` 做标的解析、网页核验、行情、技术面和新闻，再输出报告。
 - Skill：`skills/finance-stock/SKILL.md` 规定金融分析边界和流程。
 - Trace2Skill：`skills/trace2skill/SKILL.md` 和 `trace2skill_generate` 支持从成功轨迹生成新 Skill。
+- Finance Evolution：`finance_memory_add/list` 和 `finance_evolve_from_trace` 支持金融偏好、纠错、数据源经验和研究流程沉淀。
+- WeChat Connector：`wechat_status/wechat_send` 与 `/wechat` 支持企业微信群机器人、本地 relay 和 dry-run outbox。
 - CLI 欢迎页：`python -m agent.cli` 显示招财猫入口。
 - CLI 品牌页：欢迎页包含“招财进宝”金融猫、研究边界和核心能力入口。
 - CLI 启动面板：双栏展示 Logo、Available Tools、Market Sources、Commands、Session 和 Boundary。
@@ -236,7 +240,7 @@ CLI 输入修复验证：
 2026-07-07 质量改进验证：
 
 ```bash
-python -m compileall agent backend finance skills tools trace2skill tests
+python -m compileall agent backend finance mcp skills tools trace2skill wechat tests
 python -m pytest
 python -m agent.cli --selfcheck
 python -m agent.cli /tools
@@ -246,5 +250,5 @@ python -m agent.cli /sources
 结果：
 - `compileall` 通过。
 - `pytest` 通过 11 个测试；本机 xonsh history 权限 warning 不影响项目测试。
-- 自检通过，当前注册 14 个工具。
+- 自检通过，当前注册工具随版本扩展；最新包含金融、网页、MCP、微信连接和金融自进化工具。
 - `/tools` 和 `/sources` 可在单次命令模式运行。

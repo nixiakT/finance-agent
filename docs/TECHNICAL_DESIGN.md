@@ -6,7 +6,7 @@
 
 1. `backend/`: OpenAI-compatible DeepSeek 客户端和 FakeBackend。
 2. `agent/loop.py`: ReAct 主循环，负责多轮模型调用、工具调用、tool result 回填、终止和错误 observation。
-3. `tools/`: 内置工具系统，包含文件、shell、搜索、金融、网页、trace2skill。
+3. `tools/`: 内置工具系统，包含文件、shell、搜索、金融、网页、微信连接、金融自进化、trace2skill。
 4. `mcp/`: 最小 stdio MCP client 和 echo server，MCP 工具以 `mcp__` 前缀透明注册进主循环。
 5. `skills/`: Skill 加载器和领域 Skill，系统提示词会注入可用 Skill 清单。
 6. `tools/security.py`: 权限分层、安全拦截和不可信内容隔离。
@@ -24,6 +24,8 @@
 - 通用开发：`read/write/bash/edit/grep/glob/task_list`
 - 金融研究：`finance_*`
 - 网页核验：`web_search/web_fetch`
+- 微信连接：`wechat_status/wechat_send`
+- 金融自进化：`finance_memory_add/finance_memory_list/finance_evolve_from_trace`
 - 自进化：`trace2skill_generate`
 - MCP：`mcp__echo`
 
@@ -59,8 +61,25 @@ PY
 `skills/loader.py` 扫描 `skills/*/SKILL.md`，解析 frontmatter，生成可用 Skill 清单并注入系统提示词。当前包含：
 
 - `finance-stock-research`
+- `finance-research-evolution`
 - `trace2skill`
 - `example-skill`
+
+### 微信连接
+
+`wechat/connector.py` 使用适配器模式：
+
+- 默认 dry-run 写入 `.finance_agent/wechat_outbox/`，不发网络请求。
+- 配置 `FINANCE_WECHAT_WEBHOOK` 后发送企业微信/微信群机器人 webhook。
+- 配置 `FINANCE_WECHAT_RELAY_URL` 后发送到本地 HTTP relay，便于接 WeChaty 或其他桥接器。
+
+webhook、relay URL 和本地 outbox 都不写入仓库；`.finance_agent/` 已忽略。
+
+### 金融自进化
+
+`finance/evolution.py` 负责把用户偏好、纠错、数据源经验和风险规则写入 `.finance_agent/finance_memory.jsonl`。`finance_evolve_from_trace` 会从任务轨迹提炼金融学习点；默认只写 memory，核心 `skills/finance-research-evolution/SKILL.md` 保持稳定。需要生成新的专用 Skill 时，必须显式指定独立 `skill_name`。
+
+这相当于把 Hermes 式“自动保存偏好、纠错和环境事实”的机制改造成金融研究专用版本：只保存可复用研究纪律，不保存隐私、密钥或一次性噪声。
 
 ### 安全层
 
@@ -91,6 +110,8 @@ python -m agent.cli /status
 python -m agent.cli /tools
 python -m agent.cli /mcp
 python -m agent.cli /security
+python -m agent.cli /wechat status
+python -m agent.cli /memory list
 python -m agent.cli /quality minimax 3mo
 python -m agent.cli "帮我分析 AAPL 最近三个月走势，并生成投资研究摘要"
 python -m agent.cli "帮我给 minimax 做质量门禁和去劣初筛"
