@@ -63,6 +63,7 @@ def build_default_registry() -> ToolRegistry:
     from .finance_tools import finance_tools
     from .fs import read_tool, write_tool
     from .more_tools import edit_tool, glob_tool, grep_tool, task_list_tool
+    from .scheduler_tools import scheduler_tools
     from .shell import bash_tool
     from .trace2skill_tools import trace2skill_tools
     from .web_tools import web_tools
@@ -80,6 +81,7 @@ def build_default_registry() -> ToolRegistry:
         *evolution_tools,
         *trace2skill_tools,
         *web_tools,
+        *scheduler_tools,
         *wechat_tools,
     ]:
         reg.register(tool)

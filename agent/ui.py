@@ -44,6 +44,8 @@ PANEL_ROWS = [
     ("web", "search, fetch, source check"),
     ("wechat", "status, send, report outbox"),
     ("memory", "preference, correction, evolve"),
+    ("prediction", "ledger, scorecard, review"),
+    ("schedule", "wechat brief, due runner"),
     ("", ""),
     ("Market Sources", ""),
     ("quotes", "Yahoo Finance, Alpha Vantage"),
@@ -81,6 +83,10 @@ finance-agent 功能菜单
     查看或新增金融研究偏好、纠错、数据源经验和风险规则。
   /evolve <复盘/纠错/成功轨迹>
     把金融研究经验沉淀为本地 memory，并更新 finance-research-evolution Skill。
+  /predict record AAPL up 30 0.65 <理由> | /predict list | /predict eval [all] | /predict learn [save]
+    记录方向预测、查看预测账本、到期评分，并按历史命中率生成复盘；加 save 会写入金融记忆。
+  /schedule list | /schedule brief AAPL,MSFT,NVDA [interval_minutes] | /schedule run
+    创建微信定时简报任务，或执行到期任务。适合配合 cron 定时调用。
   /mcp
     显示已透明并入主循环的 MCP 工具。
   /security
@@ -177,6 +183,15 @@ Finance Memory 自进化：
   /memory add 以后分析港股先核验展示代码和 Yahoo 查询代码差异
   /evolve SpaceX 查询必须先解析 SPCX，再核验行情和新闻，不能用旧知识判断未上市
 
+预测评分闭环：
+  /predict record AAPL up 30 0.65 服务收入和回购支撑
+  /predict eval all
+  /predict learn save
+
+微信定时推送：
+  /schedule brief AAPL,MSFT,NVDA 1440
+  /schedule run
+
 研究质量门禁：
   - 信息丰富度 A/B/C
   - 数据完整性和来源风险
@@ -212,6 +227,10 @@ Basics:
     Inspect or add finance preferences, corrections, source notes and risk rules.
   /evolve <review/correction/trace>
     Save finance learning to memory and update the finance-research-evolution Skill.
+  /predict record AAPL up 30 0.65 <thesis> | /predict list | /predict eval [all] | /predict learn [save]
+    Record directional forecasts and score them later against realized prices.
+  /schedule list | /schedule brief AAPL,MSFT,NVDA [interval_minutes] | /schedule run
+    Schedule WeChat briefs and execute due jobs, usually from cron.
   /mcp
     Show MCP tools merged into the agent loop.
   /security
@@ -250,6 +269,8 @@ Research commands:
     Fetch a URL and summarize it.
   /wechat send-md # AAPL brief
     Send a report to the configured connector or local outbox.
+  /predict record SPCX down 30 0.55 valuation reset risk
+    Save a measurable forecast for future scoring.
 
 Boundary:
   Research only. No auto trading, no return promises, no deterministic buy/sell instructions.

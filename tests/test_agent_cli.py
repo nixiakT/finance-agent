@@ -226,6 +226,49 @@ def test_evolve_command_keeps_core_skill_stable(tmp_path: Any, monkeypatch: pyte
     assert not (tmp_path / "skills" / "finance-research-evolution" / "SKILL.md").exists()
 
 
+def test_predict_command_records_and_lists_predictions(tmp_path: Any, monkeypatch: pytest.MonkeyPatch) -> None:
+    import finance.predictions as predictions
+    import finance.evolution as evolution
+    import agent.commands as commands
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(predictions, "PREDICTION_PATH", tmp_path / ".finance_agent" / "predictions.jsonl")
+    monkeypatch.setattr(evolution, "MEMORY_PATH", tmp_path / ".finance_agent" / "finance_memory.jsonl")
+    monkeypatch.setattr(commands, "load_predictions", predictions.load_predictions)
+    monkeypatch.setattr(commands, "record_prediction", predictions.record_prediction)
+    monkeypatch.setattr(commands, "add_memory", evolution.add_memory)
+
+    router = CommandRouter(ToolRegistry(), finance_agent=StaticFinance())  # type: ignore[arg-type]
+    recorded = router.handle("/predict record AAPL up 30 0.6 unit thesis").output
+    listed = router.handle("/predict list").output
+    learned = router.handle("/predict learn save").output
+
+    assert "Prediction recorded" in recorded
+    assert "AAPL up" in listed
+    assert "Prediction learning report" in learned
+    assert "Saved to finance memory" in learned
+    assert (tmp_path / ".finance_agent" / "finance_memory.jsonl").exists()
+
+
+def test_schedule_command_creates_and_runs_wechat_message(tmp_path: Any, monkeypatch: pytest.MonkeyPatch) -> None:
+    import scheduler.jobs as jobs
+    import agent.commands as commands
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(jobs, "JOBS_PATH", tmp_path / ".finance_agent" / "scheduled_jobs.json")
+    monkeypatch.setattr(commands, "add_job", jobs.add_job)
+    monkeypatch.setattr(commands, "list_jobs", jobs.list_jobs)
+    monkeypatch.setattr(commands, "run_due_jobs", jobs.run_due_jobs)
+    monkeypatch.setattr(commands, "render_jobs", jobs.render_jobs)
+
+    router = CommandRouter(ToolRegistry(), finance_agent=StatusFinance())  # type: ignore[arg-type]
+    created = router.handle("/schedule message hello").output
+    ran = router.handle("/schedule run").output
+
+    assert "Scheduled" in created
+    assert "Scheduled jobs executed" in ran
+
+
 def test_resolve_command_uses_finance_resolver() -> None:
     class Finance:
         def resolve_symbol(self, query: str) -> str:
@@ -353,3 +396,18 @@ class StatusFinance:
             return [{"name": "STATIC", "status": "enabled", "detail": ""}]
 
     provider = Provider()
+
+
+class StaticFinance(StatusFinance):
+    def snapshot(self, symbol: str, period: str = "3mo", news_limit: int = 0):  # noqa: ANN001
+        from finance.models import Financials, Quote, StockSnapshot, utc_now_iso
+
+        return StockSnapshot(
+            symbol=symbol,
+            quote=Quote(symbol=symbol, price=100, source="STATIC", as_of=utc_now_iso(), is_realtime=True),
+            history=[],
+            financials=Financials(symbol=symbol, source="STATIC", as_of=utc_now_iso()),
+            news=[],
+            indicators={},
+            fetched_at=utc_now_iso(),
+        )

@@ -12,8 +12,17 @@ from finance.agent import FinanceResearchAgent
 from finance.data import ProviderError
 from finance.evolution import add_memory, extract_learning, render_memories
 from finance.http import proxy_label, test_connectivity
+from finance.predictions import (
+    evaluate_due_predictions,
+    load_predictions,
+    record_prediction,
+    render_learning_report,
+    render_predictions,
+    render_scorecard,
+)
 from finance.web import web_fetch, web_search
 from agent.ui import current_lang
+from scheduler.jobs import add_job, list_jobs, render_jobs, run_due_jobs
 from tools.security import safety_summary
 from tools.base import ToolRegistry
 from wechat import connector_status, send_markdown, send_text
@@ -79,6 +88,10 @@ class CommandRouter:
             return CommandResult(True, self._memory(args))
         if command == "/evolve":
             return CommandResult(True, self._evolve(args))
+        if command == "/predict":
+            return CommandResult(True, self._predict(args))
+        if command == "/schedule":
+            return CommandResult(True, self._schedule(args))
         if command == "/sources":
             return CommandResult(True, self._sources())
         if command == "/search":
@@ -343,6 +356,111 @@ class CommandRouter:
         ])
         return self._with_result_trace("finance_evolve_from_trace", output)
 
+    def _predict(self, args: list[str]) -> str:
+        if not args or args[0].lower() in {"list", "show"}:
+            limit = int(args[1]) if len(args) > 1 and args[1].isdigit() else 20
+            self._trace_tool("prediction_list", {"limit": limit})
+            return self._with_result_trace("prediction_list", render_predictions(load_predictions(), limit))
+        action = args[0].lower()
+        if action == "record":
+            if len(args) < 3:
+                return "用法：/predict record AAPL up [horizon_days] [confidence] [thesis]"
+            symbol = args[1]
+            direction = args[2]
+            horizon = int(args[3]) if len(args) > 3 and args[3].isdigit() else 30
+            confidence = float(args[4]) if len(args) > 4 and _is_number(args[4]) else 0.5
+            thesis_start = 5 if len(args) > 4 and _is_number(args[4]) else 4
+            thesis = " ".join(args[thesis_start:]).strip() or "manual prediction"
+            self._trace_tool("prediction_record", {
+                "symbol": symbol,
+                "direction": direction,
+                "horizon_days": horizon,
+                "confidence": confidence,
+            })
+            snapshot = self.finance.snapshot(symbol, "3mo", 0)
+            record = record_prediction(
+                symbol=snapshot.symbol,
+                direction=direction,
+                horizon_days=horizon,
+                confidence=confidence,
+                thesis=thesis,
+                baseline_price=snapshot.quote.price,
+                baseline_as_of=snapshot.quote.as_of,
+                source=snapshot.quote.source,
+            )
+            output = (
+                f"Prediction recorded: {record.id} {record.symbol} {record.direction} "
+                f"{record.horizon_days}d confidence={record.confidence:.2f} "
+                f"baseline={record.baseline_price} due={record.due_at}"
+            )
+            return self._with_result_trace("prediction_record", output)
+        if action == "eval":
+            include_not_due = len(args) > 1 and args[1].lower() in {"all", "--all", "now"}
+            self._trace_tool("prediction_evaluate", {"include_not_due": include_not_due})
+
+            def get_price(symbol: str) -> tuple[float | None, str]:
+                quote = self.finance.provider.get_quote(symbol)
+                return quote.price, quote.as_of
+
+            evaluated, card = evaluate_due_predictions(get_price=get_price, include_not_due=include_not_due)
+            output = "\n".join([
+                f"Evaluated predictions: {len(evaluated)}",
+                render_predictions(evaluated, len(evaluated)) if evaluated else "",
+                render_scorecard(card),
+            ]).strip()
+            return self._with_result_trace("prediction_evaluate", output)
+        if action in {"learn", "scorecard", "review"}:
+            save_to_memory = len(args) > 1 and args[1].lower() in {"save", "--save", "memory"}
+            self._trace_tool("prediction_learn", {"save_to_memory": save_to_memory})
+            output = render_learning_report(load_predictions())
+            if save_to_memory:
+                path = add_memory(output, category="workflow", source="prediction-learn", confidence="high")
+                output = f"{output}\n\nSaved to finance memory: {path}"
+            return self._with_result_trace("prediction_learn", output)
+        return (
+            "用法：/predict record AAPL up [horizon_days] [confidence] [thesis] | "
+            "/predict list | /predict eval [all] | /predict learn [save]"
+        )
+
+    def _schedule(self, args: list[str]) -> str:
+        if not args or args[0].lower() in {"list", "show"}:
+            self._trace_tool("schedule_list", {})
+            return self._with_result_trace("schedule_list", render_jobs(list_jobs()))
+        action = args[0].lower()
+        if action == "brief":
+            if len(args) < 2:
+                return "用法：/schedule brief AAPL,MSFT,NVDA [interval_minutes]"
+            symbols = args[1]
+            interval = int(args[2]) if len(args) > 2 and args[2].isdigit() else 1440
+            self._trace_tool("schedule_wechat_brief", {"symbols": symbols, "interval_minutes": interval})
+            job = add_job("wechat_brief", {"symbols": symbols}, interval)
+            return self._with_result_trace("schedule_wechat_brief", f"Scheduled {job.id} next={job.next_run_at}")
+        if action == "message":
+            message = " ".join(args[1:]).strip()
+            if not message:
+                return "用法：/schedule message <content>"
+            self._trace_tool("schedule_wechat_message", {"message": message})
+            job = add_job("wechat_message", {"message": message}, 1440)
+            return self._with_result_trace("schedule_wechat_message", f"Scheduled {job.id} next={job.next_run_at}")
+        if action == "run":
+            self._trace_tool("schedule_run_due", {})
+            results = run_due_jobs(self._run_scheduled_job)
+            if not results:
+                return self._with_result_trace("schedule_run_due", "No due scheduled jobs.")
+            lines = ["Scheduled jobs executed:"]
+            for job, result in results:
+                lines.append(f"- {job.id} {job.kind}: {result}")
+            return self._with_result_trace("schedule_run_due", "\n".join(lines))
+        return "用法：/schedule list | /schedule brief AAPL,MSFT,NVDA [interval_minutes] | /schedule message <content> | /schedule run"
+
+    def _run_scheduled_job(self, job) -> str:  # noqa: ANN001
+        if job.kind == "wechat_brief":
+            brief = self.finance.daily_brief(job.payload.get("symbols", ""))
+            return send_markdown(brief, title="Finance Agent Brief").status
+        if job.kind == "wechat_message":
+            return send_text(job.payload.get("message", ""), title="Finance Agent").status
+        return f"unsupported job kind: {job.kind}"
+
     def _sources(self) -> str:
         diagnostics = self.finance.provider.diagnostics()
         lines = [_msg("Current data sources:", "当前数据源状态：")]
@@ -454,3 +572,11 @@ def _wechat_mode_label() -> str:
     if os.environ.get("FINANCE_WECHAT_RELAY_URL"):
         return f"{mode}/relay"
     return "dry-run"
+
+
+def _is_number(value: str) -> bool:
+    try:
+        float(value)
+    except ValueError:
+        return False
+    return True

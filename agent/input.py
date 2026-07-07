@@ -21,6 +21,8 @@ DEFAULT_COMMANDS = [
     "/wechat ",
     "/memory ",
     "/evolve ",
+    "/predict ",
+    "/schedule ",
     "/lang ",
     "/quote ",
     "/quality ",

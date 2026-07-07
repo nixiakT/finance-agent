@@ -21,6 +21,12 @@ def debate_stock(snapshot: StockSnapshot) -> str:
         _bull(snapshot),
         _bear(snapshot),
         _value(snapshot),
+        _buffett(snapshot),
+        _munger(snapshot),
+        _duan(snapshot),
+        _li_lu(snapshot),
+        _dalio(snapshot),
+        _anti_bias(snapshot),
         _macro(snapshot),
         _risk(snapshot),
     ]
@@ -53,7 +59,11 @@ def render_debate(snapshot: StockSnapshot, roles: list[DebateRoleResult]) -> str
         lines.append("")
     lines.append("### Judge Agent")
     lines.append(f"- 综合评分: {_judge_score(snapshot)}/10")
+    lines.append(f"- 纪律结论: {_discipline_label(snapshot)}")
     lines.append(f"- 研究结论: {_judge_summary(snapshot)}")
+    lines.append(f"- 核心分歧: {_core_disagreement(roles)}")
+    lines.append(f"- 镜子测试: {_mirror_test(snapshot)}")
+    lines.append(f"- 可检验预测: {_testable_prediction(snapshot)}")
     lines.append("- 下一步验证: 阅读最新财报/公告、拆解收入驱动、比较同业估值、做情景估值。")
     return "\n".join(lines).strip()
 
@@ -123,6 +133,89 @@ def _macro(snapshot: StockSnapshot) -> DebateRoleResult:
     return DebateRoleResult("Macro Agent", "评估宏观周期和流动性影响", args, concerns)
 
 
+def _buffett(snapshot: StockSnapshot) -> DebateRoleResult:
+    f = snapshot.financials
+    args = []
+    concerns = []
+    if f.free_cash_flow is not None and f.free_cash_flow > 0:
+        args.append("自由现金流为正，可进入 owner earnings 和长期护城河讨论。")
+    if f.profit_margin is not None and f.profit_margin > 0.15:
+        args.append(f"利润率约 {_fmt_percent(_ratio_to_pct(f.profit_margin))}，显示生意质量线索。")
+    if f.pe_ratio is not None and f.pe_ratio < 30:
+        args.append(f"PE 约 {_fmt_number(f.pe_ratio)}，估值没有明显进入极端区间。")
+    if f.free_cash_flow is None:
+        concerns.append("缺少自由现金流，无法判断真实可分配现金。")
+    if f.pe_ratio is not None and f.pe_ratio > 50:
+        concerns.append("估值较高，安全边际需要更强增长假设支撑。")
+    return DebateRoleResult("Buffett Agent", "好生意、护城河、现金流与安全边际", args or ["需要先证明生意可理解且现金流可持续。"], concerns)
+
+
+def _munger(snapshot: StockSnapshot) -> DebateRoleResult:
+    f = snapshot.financials
+    args = []
+    concerns = ["需要列出反方证据，避免因为热门叙事而降低质量门槛。"]
+    if f.return_on_equity is not None and f.return_on_equity > 0.15:
+        args.append(f"ROE 约 {_fmt_percent(_ratio_to_pct(f.return_on_equity))}，资本效率值得进一步验证。")
+    if f.debt_to_equity is not None and f.debt_to_equity < 100:
+        args.append("债务权益比未显示极端杠杆压力。")
+    if not args:
+        args.append("目前缺少足够的高质量企业证据。")
+    return DebateRoleResult("Munger Agent", "反向思考、机会成本和认知偏差", args, concerns)
+
+
+def _duan(snapshot: StockSnapshot) -> DebateRoleResult:
+    f = snapshot.financials
+    args = []
+    concerns = ["需要验证用户价值、企业文化和管理层，而不是只看短期价格。"]
+    if f.profit_margin is not None and f.profit_margin > 0.12:
+        args.append("利润率具备观察价值，可能反映产品/服务有一定用户价值。")
+    if f.revenue is not None and f.revenue > 0:
+        args.append(f"营收为 {_fmt_big(f.revenue)}，需要拆分增长质量和可持续性。")
+    if not args:
+        args.append("缺少商业模式和用户价值证据，先保持不懂不投。")
+    return DebateRoleResult("Duan Agent", "好生意、用户价值和长期主义", args, concerns)
+
+
+def _li_lu(snapshot: StockSnapshot) -> DebateRoleResult:
+    f = snapshot.financials
+    args = []
+    concerns = ["需要证明长期确定性和下行保护，而不是只证明短期便宜或热门。"]
+    if f.free_cash_flow is not None and f.free_cash_flow > 0:
+        args.append("自由现金流为正，可继续讨论内在价值和安全边际。")
+    if f.debt_to_equity is not None and f.debt_to_equity < 80:
+        args.append("杠杆没有显示极端压力，长期生存风险需要进一步量化。")
+    if f.return_on_equity is not None and f.return_on_equity > 0.12:
+        args.append(f"ROE 约 {_fmt_percent(_ratio_to_pct(f.return_on_equity))}，具备长期资本回报观察价值。")
+    if f.free_cash_flow is None or f.return_on_equity is None:
+        concerns.append("缺少现金流或资本回报数据时，应归入灰色地带。")
+    return DebateRoleResult("Li Lu Agent", "长期确定性、信息边界和安全边际", args or ["信息边界不足，先不把它放进高确定性清单。"], concerns)
+
+
+def _dalio(snapshot: StockSnapshot) -> DebateRoleResult:
+    q = snapshot.quote
+    i = snapshot.indicators
+    args = [
+        f"货币与市场: {q.currency or '未知'}，需结合利率、美元流动性和风险偏好。",
+        f"波动率线索: {_fmt_percent(i.get('annualized_volatility_pct'))}，影响组合风险预算。",
+    ]
+    concerns = ["单一股票暴露需要放进组合看相关性和最坏情形。"]
+    return DebateRoleResult("Dalio Agent", "宏观周期、相关性和风险平价视角", args, concerns)
+
+
+def _anti_bias(snapshot: StockSnapshot) -> DebateRoleResult:
+    concerns = [
+        "区分事实和推断；新闻标题不能替代公告、财报和电话会原文。",
+        "记录预测并事后评分，否则无法知道研究框架是否真的有效。",
+    ]
+    args = [
+        f"当前数据源: {snapshot.quote.source}/{snapshot.financials.source}。",
+        f"行情时间: {snapshot.quote.as_of or '未知'}。",
+    ]
+    if snapshot.quote.source == "SAMPLE_FALLBACK" or snapshot.financials.source == "SAMPLE_FALLBACK":
+        concerns.append("样例数据出现时，必须暂停真实判断。")
+    return DebateRoleResult("Anti-Bias Agent", "反确认偏误、反叙事过拟合和可检验性", args, concerns)
+
+
 def _risk(snapshot: StockSnapshot) -> DebateRoleResult:
     q = snapshot.quote
     f = snapshot.financials
@@ -174,3 +267,45 @@ def _judge_summary(snapshot: StockSnapshot) -> str:
     if score >= 4:
         return "可继续观察，当前多空证据较均衡。"
     return "暂不进入优先研究池，主要因为数据不足或风险信号偏多。"
+
+
+def _discipline_label(snapshot: StockSnapshot) -> str:
+    score = _judge_score(snapshot)
+    if snapshot.quote.source == "SAMPLE_FALLBACK" or snapshot.financials.source == "SAMPLE_FALLBACK":
+        return "不通过 - 数据源不可用于真实判断。"
+    if score >= 7:
+        return "通过深入研究 - 进入候选池，但不等于买入。"
+    if score >= 4:
+        return "灰色地带 - 继续跟踪，等待关键证据。"
+    return "不通过 - 当前证据不足或风险收益不清晰。"
+
+
+def _mirror_test(snapshot: StockSnapshot) -> str:
+    f = snapshot.financials
+    missing = []
+    if f.revenue is None:
+        missing.append("收入驱动")
+    if f.free_cash_flow is None:
+        missing.append("自由现金流")
+    if f.return_on_equity is None:
+        missing.append("资本回报")
+    if missing:
+        return f"未通过；无法用 5 句话讲清 {', '.join(missing)}。"
+    return "初步通过；仍需用 5 句话讲清生意、护城河、现金流、估值和反方风险。"
+
+
+def _core_disagreement(roles: list[DebateRoleResult]) -> str:
+    concerns = [concern for role in roles for concern in role.concerns]
+    if not concerns:
+        return "当前分歧较少，主要需要补充财报和估值验证。"
+    return concerns[0]
+
+
+def _testable_prediction(snapshot: StockSnapshot) -> str:
+    i = snapshot.indicators
+    trend = i.get("return_3m_pct")
+    if trend is not None and trend > 0:
+        return f"未来 30 天相对当前价格能否维持正收益；应记录 baseline={_fmt_number(snapshot.quote.price)}。"
+    if trend is not None and trend < 0:
+        return f"未来 30 天是否继续弱于当前价格；应记录 baseline={_fmt_number(snapshot.quote.price)}。"
+    return f"未来 30 天方向不明确；应先记录中性预测和 baseline={_fmt_number(snapshot.quote.price)}。"

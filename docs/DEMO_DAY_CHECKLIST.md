@@ -100,6 +100,6 @@ PY
 
 ```bash
 python -m pytest
-python -Werror -m compileall agent backend finance mcp skills tools trace2skill tests
+python -Werror -m compileall agent backend finance mcp skills tools trace2skill wechat scheduler tests
 python -m agent.cli --selfcheck
 ```

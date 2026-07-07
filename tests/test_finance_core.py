@@ -8,6 +8,7 @@ from finance.agent import FinanceResearchAgent
 from finance.backtest import StrategyConfig, backtest_moving_average_cross, format_backtest, parse_strategy
 from finance.data import ProviderChain, ProviderError, SampleDataProvider, _news_matches
 from finance.models import Candle, Financials, NewsItem, Quote, StockSnapshot, utc_now_iso
+from finance.predictions import evaluate_prediction, record_prediction, render_learning_report
 from finance.quality import render_quality_screen
 from finance.report import render_stock_report
 from finance.resolver import resolve_symbol
@@ -137,6 +138,21 @@ def test_route_task_selects_compare_and_backtest() -> None:
     assert "# 策略回测结果" in backtest
 
 
+def test_debate_includes_berkshire_style_roles() -> None:
+    agent = FinanceResearchAgent(provider=ProviderChain(providers=[StaticProvider()]))
+
+    output = agent.debate_stocks(["AAPL"])
+
+    assert "Buffett Agent" in output
+    assert "Munger Agent" in output
+    assert "Duan Agent" in output
+    assert "Li Lu Agent" in output
+    assert "Anti-Bias Agent" in output
+    assert "纪律结论" in output
+    assert "镜子测试" in output
+    assert "可检验预测" in output
+
+
 def test_route_task_selects_quality_screen() -> None:
     agent = FinanceResearchAgent(provider=ProviderChain(providers=[StaticProvider()]))
 
@@ -201,6 +217,56 @@ def test_parse_strategy_and_backtest_return_metrics() -> None:
     assert result["strategy"] == "moving_average_cross"
     assert result["initial_cash"] == 50_000
     assert "total_return_pct" in result
+
+
+def test_prediction_record_and_evaluation(tmp_path) -> None:  # noqa: ANN001
+    path = tmp_path / "predictions.jsonl"
+
+    record = record_prediction(
+        symbol="AAPL",
+        direction="up",
+        horizon_days=30,
+        confidence=0.7,
+        thesis="unit test",
+        baseline_price=100,
+        baseline_as_of="2026-01-01T00:00:00Z",
+        path=path,
+    )
+    evaluated = evaluate_prediction(record, evaluation_price=110)
+
+    assert evaluated.hit is True
+    assert evaluated.return_pct == 10
+    assert evaluated.score and evaluated.score > 0
+
+
+def test_prediction_learning_report_groups_evaluated_records(tmp_path) -> None:  # noqa: ANN001
+    path = tmp_path / "predictions.jsonl"
+    first = record_prediction(
+        symbol="AAPL",
+        direction="up",
+        horizon_days=30,
+        confidence=0.8,
+        thesis="unit win",
+        baseline_price=100,
+        path=path,
+    )
+    second = record_prediction(
+        symbol="MSFT",
+        direction="down",
+        horizon_days=30,
+        confidence=0.9,
+        thesis="unit miss",
+        baseline_price=100,
+        path=path,
+    )
+    evaluate_prediction(first, evaluation_price=110)
+    evaluate_prediction(second, evaluation_price=105)
+
+    output = render_learning_report([first, second])
+
+    assert "Prediction scorecard" in output
+    assert "Direction buckets" in output
+    assert "high-confidence misses" in output
 
 
 def test_parse_strategy_notes_reordered_windows() -> None:

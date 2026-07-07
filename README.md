@@ -11,10 +11,12 @@
 - 新闻和网页核验：搜索公开页面或抓取指定 URL，确认代码、上市状态和来源。
 - 结构化报告：价格、走势、基本面、技术面、新闻、风险和研究结论。
 - 研究质量门禁：信息丰富度 A/B/C、数据缺口、快速否决/重审信号、下一步核验。
-- 投资框架：巴菲特/芒格、段永平、达利欧。
-- 多智能体辩论：Bull、Bear、Value、Macro、Risk、Judge。
+- 投资框架：巴菲特/芒格、段永平、李录、达利欧。
+- 多智能体辩论：Bull、Bear、Value、Buffett、Munger、Duan、Li Lu、Dalio、Anti-Bias、Macro、Risk、Judge，并输出纪律结论、镜子测试和可检验预测。
+- 预测评分闭环：记录每次看涨/看跌/中性判断，按真实后续价格评估命中率、置信度和高置信错判。
 - 策略辅助：移动均线交叉策略回测。
 - 自选股简报：批量生成跟踪摘要。
+- 微信连接与定时推送：支持 dry-run outbox、企业微信 webhook、本地 relay 和本地定时简报任务。
 - Trace2Skill：把成功任务轨迹沉淀为项目 Skill。
 - 通用 Agent 工具：read/write/bash/edit/grep/glob/task_list，支持现场随机代码任务。
 - MCP：最小 stdio client 已接入 echo server，MCP 工具以 `mcp__` 前缀透明并入主循环。
@@ -65,6 +67,9 @@ python -m agent.cli "生成我的自选股每日简报：AAPL, MSFT, NVDA"
 /wechat status/send/send-md  查看微信连接状态，或发送报告到微信/本地 outbox
 /memory list/add             查看或新增金融研究偏好、纠错和风险规则
 /evolve <复盘/纠错/轨迹>       把金融经验沉淀为 memory 和 Skill
+/predict record/list/eval/learn
+                              记录预测、查看预测账本、事后评分和复盘学习
+/schedule list/brief/run     创建微信定时简报任务，或执行到期任务
 /mcp                         查看已接入 MCP 工具
 /security                    查看权限分层和注入防护策略
 /resolve minimax             解析公司名/简称到 A 股、港股、美股候选代码
@@ -141,9 +146,22 @@ FINANCE_WECHAT_MODE=dry-run
 /memory add 以后回答 SpaceX 先解析 SPCX 并核验行情，不能用旧知识判断未上市
 /memory list
 /evolve SpaceX 查询必须先解析 SPCX，再核验公开网页、行情和新闻来源
+/predict record AAPL up 30 0.65 服务收入和回购支撑
+/predict eval all
+/predict learn save
+/schedule brief AAPL,MSFT,NVDA 1440
+/schedule run
 ```
 
 金融自进化会把偏好、纠错、数据源经验和风险规则写入 `.finance_agent/finance_memory.jsonl`。核心 `skills/finance-research-evolution/SKILL.md` 保持稳定；如果确实需要生成新的专用 Skill，可以通过底层 `finance_evolve_from_trace` 指定独立 `skill_name`。本地 memory 目录已被 git 忽略；写入 Skill 前会脱敏常见 key/token/cookie。
+
+预测评分闭环会把每次方向判断保存到 `.finance_agent/predictions.jsonl`，包含 baseline 价格、期限、置信度和 thesis。到期后运行 `/predict eval`，系统会拉取最新价格并计算方向命中、实际收益和置信度加权分数。`/predict eval all` 可用于 Demo 立即评分未到期预测；`/predict learn` 会按方向桶、命中率、置信度失误和高置信错判生成复盘，用来量化研究框架是否真的有效。`/predict learn save` 会把复盘写入金融 memory，后续可用 `/memory list` 查看。
+
+微信定时推送采用本地文件任务表 `.finance_agent/scheduled_jobs.json`。创建任务后，需要用 cron、launchd 或手动定期执行：
+
+```bash
+python -m agent.cli /schedule run
+```
 
 ## Configuration
 
@@ -222,6 +240,10 @@ Useful commands:
 /lang en
 /proxy test
 /wechat status
+/predict record SPCX down 30 0.55 valuation reset risk
+/predict learn save
+/schedule brief AAPL,MSFT,NVDA 1440
+/schedule run
 /resolve SpaceX
 /quote SPCX
 /report AAPL 1y
@@ -245,7 +267,7 @@ MIT，见 [LICENSE](LICENSE)。
 ## 开发验证
 
 ```bash
-python -m compileall agent backend finance mcp skills tools trace2skill wechat tests
+python -m compileall agent backend finance mcp skills tools trace2skill wechat scheduler tests
 python -m agent.cli --selfcheck
 python -m pytest
 ```

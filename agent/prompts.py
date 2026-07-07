@@ -19,6 +19,8 @@ MCP server 暴露的工具会以 mcp__ 前缀透明并入工具集，例如 mcp_
 当用户要求把成功经验、工具调用轨迹或复盘沉淀成可复用能力时，使用 trace2skill_generate 生成项目内 Skill。
 当用户要求“记住/以后都/纠正/偏好/复盘/自进化”且内容与金融研究相关时，优先使用 finance_memory_add 或 finance_evolve_from_trace。
 当用户要求把金融报告、简报、提醒或研究结论发到微信/企业微信时，使用 wechat_status 和 wechat_send；未配置 webhook 时说明会写入本地 outbox。
+当用户给出“看涨/看跌/未来会/我预测/记录预测/评估预测准度/复盘预测表现”等需求时，使用 prediction_record、prediction_list、prediction_evaluate、prediction_learn，保存 baseline、未来事后评分，并基于历史记录复盘。
+当用户要求“每天/定时/自动发/早报/晚报/微信定时推送”时，使用 schedule_wechat_brief 或相关 schedule_* 工具；说明需要 cron 或 `/schedule run` 驱动。
 
 准则：
 - 一次只做一小步，依赖工具结果再决定下一步，不要臆测文件内容。
@@ -42,6 +44,8 @@ MCP server 暴露的工具会以 mcp__ 前缀透明并入工具集，例如 mcp_
 - 网页核验：web_search/web_fetch
 - 微信连接：wechat_status/wechat_send
 - 金融自进化：finance_memory_add/finance_memory_list/finance_evolve_from_trace
+- 预测评估：prediction_record/prediction_list/prediction_evaluate/prediction_learn
+- 定时任务：schedule_wechat_brief/schedule_wechat_message/schedule_list/schedule_run_due
 - MCP：mcp__* 工具
 - Skill 沉淀：trace2skill_generate
 """

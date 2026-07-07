@@ -2,6 +2,14 @@
 from __future__ import annotations
 
 from finance.evolution import add_memory, extract_learning, render_memories
+from finance.predictions import (
+    evaluate_due_predictions,
+    load_predictions,
+    record_prediction,
+    render_learning_report,
+    render_predictions,
+    render_scorecard,
+)
 from trace2skill import generate_skill
 from .base import Tool
 
@@ -57,6 +65,68 @@ def _finance_evolve_from_trace(
     ])
 
 
+def _prediction_record(
+    symbol: str,
+    direction: str,
+    horizon_days: int = 30,
+    confidence: float = 0.5,
+    thesis: str = "",
+) -> str:
+    from finance.agent import FinanceResearchAgent
+
+    agent = FinanceResearchAgent()
+    snapshot = agent.snapshot(symbol, "3mo", 0)
+    record = record_prediction(
+        symbol=snapshot.symbol,
+        direction=direction,
+        horizon_days=horizon_days,
+        confidence=confidence,
+        thesis=thesis or "manual prediction",
+        baseline_price=snapshot.quote.price,
+        baseline_as_of=snapshot.quote.as_of,
+        source=snapshot.quote.source,
+    )
+    return "\n".join([
+        "Prediction recorded:",
+        f"- id: {record.id}",
+        f"- symbol: {record.symbol}",
+        f"- direction: {record.direction}",
+        f"- horizon_days: {record.horizon_days}",
+        f"- confidence: {record.confidence:.2f}",
+        f"- baseline: {record.baseline_price} ({record.baseline_as_of})",
+        f"- due_at: {record.due_at}",
+    ])
+
+
+def _prediction_list(limit: int = 20) -> str:
+    return render_predictions(load_predictions(), limit)
+
+
+def _prediction_evaluate(include_not_due: bool = False) -> str:
+    from finance.agent import FinanceResearchAgent
+
+    agent = FinanceResearchAgent()
+
+    def get_price(symbol: str) -> tuple[float | None, str]:
+        quote = agent.provider.get_quote(symbol)
+        return quote.price, quote.as_of
+
+    evaluated, card = evaluate_due_predictions(get_price=get_price, include_not_due=include_not_due)
+    lines = [f"Evaluated predictions: {len(evaluated)}"]
+    if evaluated:
+        lines.append(render_predictions(evaluated, len(evaluated)))
+    lines.append(render_scorecard(card))
+    return "\n".join(lines)
+
+
+def _prediction_learn(save_to_memory: bool = False) -> str:
+    report = render_learning_report(load_predictions())
+    if save_to_memory:
+        path = add_memory(report, category="workflow", source="prediction-learn", confidence="high")
+        return f"{report}\n\nSaved to finance memory: {path}"
+    return report
+
+
 finance_memory_add_tool = Tool(
     name="finance_memory_add",
     description="保存金融研究偏好、纠错、数据源经验、风险规则或策略复盘到本地记忆。",
@@ -101,9 +171,51 @@ finance_evolve_from_trace_tool = Tool(
     run=_finance_evolve_from_trace,
 )
 
+prediction_record_tool = Tool(
+    name="prediction_record",
+    description="记录一次股票方向预测，保存 baseline 价格、期限、置信度和 thesis，用于未来事后评分。",
+    parameters={
+        "type": "object",
+        "properties": {
+            "symbol": {"type": "string"},
+            "direction": {"type": "string", "description": "up/down/neutral"},
+            "horizon_days": {"type": "integer"},
+            "confidence": {"type": "number"},
+            "thesis": {"type": "string"},
+        },
+        "required": ["symbol", "direction"],
+    },
+    run=_prediction_record,
+)
+
+prediction_list_tool = Tool(
+    name="prediction_list",
+    description="查看历史预测账本。",
+    parameters={"type": "object", "properties": {"limit": {"type": "integer"}}},
+    run=_prediction_list,
+)
+
+prediction_evaluate_tool = Tool(
+    name="prediction_evaluate",
+    description="对到期预测做事后评分；可选择 include_not_due 立即评估未到期预测用于演示。",
+    parameters={"type": "object", "properties": {"include_not_due": {"type": "boolean"}}},
+    run=_prediction_evaluate,
+)
+
+prediction_learn_tool = Tool(
+    name="prediction_learn",
+    description="根据已评分预测生成复盘报告，量化哪些方向、置信度和 thesis 类型表现较弱，可保存到金融记忆。",
+    parameters={"type": "object", "properties": {"save_to_memory": {"type": "boolean"}}},
+    run=_prediction_learn,
+)
+
 
 evolution_tools = [
     finance_memory_add_tool,
     finance_memory_list_tool,
     finance_evolve_from_trace_tool,
+    prediction_record_tool,
+    prediction_list_tool,
+    prediction_evaluate_tool,
+    prediction_learn_tool,
 ]
