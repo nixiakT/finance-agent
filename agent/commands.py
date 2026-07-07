@@ -2,9 +2,11 @@
 from __future__ import annotations
 
 import json
+import os
 import shlex
 from dataclasses import dataclass
 from typing import Callable
+from urllib.parse import urlsplit
 
 from finance.agent import FinanceResearchAgent
 from finance.data import ProviderError
@@ -56,6 +58,8 @@ class CommandRouter:
             return self._think(args, think_enabled)
         if command == "/tools":
             return CommandResult(True, self._tools())
+        if command == "/status":
+            return CommandResult(True, self._status(think_enabled))
         if command == "/sources":
             return CommandResult(True, self._sources())
         if command == "/search":
@@ -77,6 +81,7 @@ class CommandRouter:
             "/news": self._news,
             "/indicators": self._indicators,
             "/report": self._report,
+            "/quality": self._quality,
             "/compare": self._compare,
             "/debate": self._debate,
             "/backtest": self._backtest,
@@ -132,6 +137,12 @@ class CommandRouter:
         self._trace_tool("finance_generate_report", {"symbol": symbol, "period": period})
         return self._with_result_trace("finance_generate_report", self.finance.generate_report(symbol, period))
 
+    def _quality(self, args: list[str]) -> str:
+        symbol = _require_arg(args, "/quality AAPL [period]")
+        period = args[1] if len(args) > 1 else "1y"
+        self._trace_tool("finance_quality_screen", {"symbol": symbol, "period": period})
+        return self._with_result_trace("finance_quality_screen", self.finance.quality_screen(symbol, period))
+
     def _compare(self, args: list[str]) -> str:
         symbols = _require_many(args, "/compare NVDA AMD [period]")
         period = _period_arg(args[-1])
@@ -176,6 +187,20 @@ class CommandRouter:
     def _tools(self) -> str:
         names = self.registry.names()
         return "已注册工具：\n" + "\n".join(f"- {name}" for name in names)
+
+    def _status(self, think_enabled: bool) -> str:
+        diagnostics = self.finance.provider.diagnostics()
+        enabled_sources = [row["name"] for row in diagnostics if row.get("status") == "enabled"]
+        return "\n".join([
+            "Finance Agent 状态：",
+            f"- 模型: {os.environ.get('DEEPSEEK_MODEL', '未配置')}",
+            f"- Base URL: {_safe_base_url(os.environ.get('DEEPSEEK_BASE_URL', ''))}",
+            f"- 工具数: {len(self.registry)}",
+            f"- thinking: {'on' if think_enabled else 'off'}（默认 on，展示时间/耗时/工具摘要）",
+            f"- 数据源: {', '.join(enabled_sources) if enabled_sources else '无可用真实数据源'}",
+            "- License: MIT",
+            "- 边界: research only, no auto trading",
+        ])
 
     def _sources(self) -> str:
         diagnostics = self.finance.provider.diagnostics()
@@ -247,3 +272,19 @@ def _json_preview(value: object) -> str:
         return json.dumps(value, ensure_ascii=False, default=str, separators=(",", ":"))
     except TypeError:
         return str(value)
+
+
+def _safe_base_url(value: str) -> str:
+    if not value:
+        return "未配置"
+    parsed = urlsplit(value)
+    if not parsed.netloc:
+        return value.split("?")[0]
+    host = parsed.hostname or parsed.netloc
+    port = ""
+    try:
+        if parsed.port:
+            port = f":{parsed.port}"
+    except ValueError:
+        port = ""
+    return f"{parsed.scheme}://{host}{port}{parsed.path.rstrip('/')}"

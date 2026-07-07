@@ -40,6 +40,10 @@ def _generate_report(symbol: str, period: str = "1y") -> str:
     return _agent.generate_report(symbol, period)
 
 
+def _quality_screen(symbol: str, period: str = "1y") -> str:
+    return _agent.quality_screen(symbol, period)
+
+
 def _compare_stocks(symbols: list[str] | str, period: str = "1y") -> str:
     return _agent.compare_stocks(symbols, period)
 
@@ -154,6 +158,17 @@ finance_generate_report_tool = Tool(
     run=_generate_report,
 )
 
+finance_quality_screen_tool = Tool(
+    name="finance_quality_screen",
+    description="对股票做研究质量门禁和去劣初筛，输出信息丰富度、数据缺口、快速否决/重审信号和下一步核验。",
+    parameters={
+        "type": "object",
+        "properties": {"symbol": {"type": "string"}, "period": {"type": "string"}},
+        "required": ["symbol"],
+    },
+    run=_quality_screen,
+)
+
 finance_compare_stocks_tool = Tool(
     name="finance_compare_stocks",
     description="比较多只股票的估值、基本面、技术指标和风险。",
@@ -239,6 +254,7 @@ finance_tools = [
     finance_get_news_tool,
     finance_calculate_indicators_tool,
     finance_generate_report_tool,
+    finance_quality_screen_tool,
     finance_compare_stocks_tool,
     finance_debate_stocks_tool,
     finance_backtest_strategy_tool,

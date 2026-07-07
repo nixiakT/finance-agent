@@ -69,6 +69,28 @@ def test_sources_command_reports_provider_status() -> None:
     assert "TEST: enabled - unit test" in output
 
 
+def test_status_command_reports_runtime_summary(monkeypatch: pytest.MonkeyPatch) -> None:
+    class Provider:
+        def diagnostics(self) -> list[dict[str, str]]:
+            return [{"name": "STATIC", "status": "enabled", "detail": ""}]
+
+    class Finance:
+        provider = Provider()
+
+    router = CommandRouter(ToolRegistry(), finance_agent=Finance())  # type: ignore[arg-type]
+    monkeypatch.setenv("DEEPSEEK_BASE_URL", "https://user:pass@example.com:8443/v1?token=secret")
+
+    output = router.handle("/status", think_enabled=True).output
+
+    assert "Finance Agent 状态" in output
+    assert "thinking: on" in output
+    assert "License: MIT" in output
+    assert "STATIC" in output
+    assert "https://example.com:8443/v1" in output
+    assert "token=secret" not in output
+    assert "user:pass" not in output
+
+
 def test_resolve_command_uses_finance_resolver() -> None:
     class Finance:
         def resolve_symbol(self, query: str) -> str:
@@ -92,6 +114,18 @@ def test_finance_command_surfaces_provider_error_without_traceback() -> None:
 
     assert "数据获取失败" in output
     assert "not found" in output
+
+
+def test_quality_command_uses_finance_quality_screen() -> None:
+    class Finance:
+        def quality_screen(self, symbol: str, period: str = "1y") -> str:
+            return f"quality {symbol} {period}"
+
+    router = CommandRouter(ToolRegistry(), finance_agent=Finance())  # type: ignore[arg-type]
+
+    output = router.handle("/quality AAPL 3mo").output
+
+    assert output == "quality AAPL 3mo"
 
 
 def test_render_trace_includes_timestamp_and_elapsed() -> None:

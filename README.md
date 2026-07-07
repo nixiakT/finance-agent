@@ -10,6 +10,7 @@
 - 基本面：PE、EPS、营收、利润、现金流、ROE、利润率等字段，缺失时明确标注。
 - 新闻和网页核验：搜索公开页面或抓取指定 URL，确认代码、上市状态和来源。
 - 结构化报告：价格、走势、基本面、技术面、新闻、风险和研究结论。
+- 研究质量门禁：信息丰富度 A/B/C、数据缺口、快速否决/重审信号、下一步核验。
 - 投资框架：巴菲特/芒格、段永平、达利欧。
 - 多智能体辩论：Bull、Bear、Value、Macro、Risk、Judge。
 - 策略辅助：移动均线交叉策略回测。
@@ -51,8 +52,10 @@ python -m agent.cli "生成我的自选股每日简报：AAPL, MSFT, NVDA"
 
 ```text
 /think on | /think off       开关高层执行轨迹，默认开启，展示时间、耗时和工具摘要
+/status                      查看模型、数据源、工具数、thinking 状态和 License
 /resolve minimax             解析公司名/简称到 A 股、港股、美股候选代码
 /quote AAPL                  查询行情
+/quality AAPL 1y             研究质量门禁和去劣初筛
 /history AAPL 1y             历史价格和指标摘要
 /financials AAPL             基本面摘要
 /news AAPL 5                 新闻
@@ -116,9 +119,14 @@ FINANCE_ALLOW_SAMPLE_FALLBACK=0
 
 - 本项目只做研究辅助，不做自动交易。
 - 输出必须区分事实、推断、风险和数据缺口。
+- 研究报告会包含质量门禁，但通过门禁不代表可以买入，只表示数据更适合继续研究。
 - 回测不包含滑点、手续费、税费、分红复权和真实成交约束。
 - 免费数据源可能延迟、限流或缺失字段。
 - 网页抓取遇到 WAF/JS challenge 时只会标注限制，不会假装读取完整正文。
+
+## License
+
+MIT，见 [LICENSE](LICENSE)。
 
 ## 开发验证
 

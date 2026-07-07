@@ -103,6 +103,10 @@
 - [x] 参考 Claude Code 的终端执行可见性，默认开启高层 `thinking` 轨迹。
 - [x] `thinking` 轨迹增加本地时间、模型回合、工具选择、工具参数摘要、结果预览和耗时。
 - [x] 单次自然语言任务和单次 slash command 默认展示 trace；交互模式仍可用 `/think off` 关闭。
+- [x] 增加 MIT License。
+- [x] 参考 AI Berkshire 的研究纪律，增加信息丰富度 A/B/C、数据缺口、快速否决/重审信号和下一步核验。
+- [x] 增加 `finance_quality_screen` 工具和 `/quality` 命令，用于研究质量门禁和去劣初筛。
+- [x] 增加 `/status` 命令，快速展示模型、base URL、工具数、数据源、thinking 状态和 License。
 
 ## 已实现功能
 
@@ -113,6 +117,7 @@
 - 新闻：`finance_get_news`。
 - 技术指标：`finance_calculate_indicators`，包含 MA5/20/60、RSI14、MACD、年化波动率和区间收益。
 - 研究报告：`finance_generate_report`。
+- 研究质量门禁：`finance_quality_screen` 和 `/quality`，输出信息丰富度、数据完整性、快速否决/重审信号和下一步核验。
 - 多股票对比：`finance_compare_stocks`。
 - 多智能体辩论：`finance_debate_stocks`。
 - 策略回测：`finance_backtest_strategy`，第一版支持移动均线交叉。
@@ -129,6 +134,7 @@
 - CLI 交互模式：`python -m agent.cli` 后可在同一进程中持续提问，复用会话上下文。
 - CLI 命令模式：常用金融工具有对应 slash command，可绕过自然语言路由直接执行。
 - CLI 高层 trace：默认展示模型回合、工具调用、结果摘要、时间戳和耗时，不输出隐藏推理链；可用 `/think off` 关闭。
+- CLI 状态面板：`/status` 展示模型、数据源、工具数、thinking 和 License。
 - CLI 行编辑：支持历史记录、方向键、删除键、常见 Emacs 快捷键和命令补全。
 - CLI 输入清洗：误粘贴 `finance-agent >` 前缀时会自动剥离。
 - 标的核验：自然语言包含“标的/代码/上市”等问题时，先做公开网页搜索，再做行情核验。

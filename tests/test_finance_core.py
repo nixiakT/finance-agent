@@ -8,6 +8,7 @@ from finance.agent import FinanceResearchAgent
 from finance.backtest import StrategyConfig, backtest_moving_average_cross, format_backtest, parse_strategy
 from finance.data import ProviderChain, ProviderError, SampleDataProvider, _news_matches
 from finance.models import Candle, Financials, NewsItem, Quote, StockSnapshot, utc_now_iso
+from finance.quality import render_quality_screen
 from finance.report import render_stock_report
 from finance.resolver import resolve_symbol
 from finance.symbols import extract_symbols, normalize_symbol, to_yahoo_symbol
@@ -125,6 +126,16 @@ def test_route_task_selects_compare_and_backtest() -> None:
     assert "# 策略回测结果" in backtest
 
 
+def test_route_task_selects_quality_screen() -> None:
+    agent = FinanceResearchAgent(provider=ProviderChain(providers=[StaticProvider()]))
+
+    output = agent.route_task("帮我给 AAPL 做质量门禁和去劣初筛")
+
+    assert "# 研究质量初筛" in output
+    assert "信息丰富度" in output
+    assert "快速否决/重审信号" in output
+
+
 def test_route_task_selects_market_update_for_today_question(monkeypatch: pytest.MonkeyPatch) -> None:
     import finance.agent as finance_agent
 
@@ -213,6 +224,50 @@ def test_report_skips_framework_scoring_for_sample_financials() -> None:
 
     assert "暂不对护城河、现金流、安全边际等框架打分" in output
     assert "评分" not in output
+
+
+def test_report_includes_research_quality_gate() -> None:
+    snapshot = StockSnapshot(
+        symbol="AAPL",
+        quote=Quote(symbol="AAPL", source="STATIC", as_of=utc_now_iso(), price=100, is_realtime=True),
+        history=rising_candles(120),
+        financials=Financials(
+            symbol="AAPL",
+            source="STATIC",
+            as_of=utc_now_iso(),
+            pe_ratio=20,
+            free_cash_flow=1_000_000,
+            return_on_equity=0.18,
+            profit_margin=0.12,
+        ),
+        news=[NewsItem(title="Static headline")],
+        indicators={},
+        fetched_at=utc_now_iso(),
+    )
+
+    output = render_stock_report(snapshot)
+
+    assert "## 研究质量门禁" in output
+    assert "信息丰富度" in output
+    assert "下一步核验" in output
+
+
+def test_quality_screen_labels_low_confidence_data() -> None:
+    snapshot = StockSnapshot(
+        symbol="AAPL",
+        quote=Quote(symbol="AAPL", source="UNAVAILABLE", as_of=utc_now_iso()),
+        history=[],
+        financials=Financials(symbol="AAPL", source="UNAVAILABLE", as_of=utc_now_iso()),
+        news=[],
+        indicators={},
+        fetched_at=utc_now_iso(),
+    )
+
+    output = render_quality_screen(snapshot)
+
+    assert "信息丰富度: C" in output
+    assert "核心数据置信度不足" in output
+    assert "数据缺口" in output
 
 
 def test_utc_now_iso_uses_z_suffix() -> None:

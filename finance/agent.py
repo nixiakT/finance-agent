@@ -6,6 +6,7 @@ from .data import ProviderChain, export_history_csv
 from .debate import debate_stocks
 from .indicators import calculate_indicators, format_indicators
 from .models import Financials, NewsItem, Quote, StockSnapshot, utc_now_iso
+from .quality import render_quality_screen
 from .report import render_comparison, render_daily_brief, render_stock_report
 from .resolver import resolve_symbol, resolve_symbol_text
 from .symbols import extract_symbols, normalize_symbol
@@ -143,6 +144,9 @@ class FinanceResearchAgent:
     def generate_report(self, symbol: str, period: str = "1y") -> str:
         return render_stock_report(self.snapshot(symbol, period, 5))
 
+    def quality_screen(self, symbol: str, period: str = "1y") -> str:
+        return render_quality_screen(self.snapshot(symbol, period, 5))
+
     def compare_stocks(self, symbols: list[str] | str, period: str = "1y") -> str:
         symbol_list = _coerce_symbols(symbols)
         snapshots = [self.snapshot(symbol, period, 3) for symbol in symbol_list]
@@ -196,6 +200,8 @@ class FinanceResearchAgent:
             return self.backtest_strategy(symbols[0], task, period or "2y")
         if any(word in task for word in ("简报", "自选股")) or "brief" in lowered:
             return self.daily_brief(symbols, period or "3mo")
+        if any(word in task for word in ("质量门禁", "去劣", "初筛", "checklist", "quality")):
+            return self.quality_screen(symbols[0], period or "1y")
         if any(word in task for word in ("比较", "对比")) or "compare" in lowered:
             return self.compare_stocks(symbols, period or "1y")
         if any(word in task for word in ("辩论", "选股", "debate")):

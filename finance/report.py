@@ -6,6 +6,7 @@ from typing import Any
 from .frameworks import evaluate_frameworks, format_framework_results
 from .indicators import format_indicators
 from .models import Financials, NewsItem, Quote, StockSnapshot
+from .quality import render_quality_gate
 
 
 def render_stock_report(snapshot: StockSnapshot) -> str:
@@ -39,6 +40,9 @@ def render_stock_report(snapshot: StockSnapshot) -> str:
         "",
         "## 新闻事件",
         _format_news(snapshot.news),
+        "",
+        "## 研究质量门禁",
+        render_quality_gate(snapshot),
         "",
         "## 投资大师框架蒸馏",
         _format_framework_section(frameworks, financials),

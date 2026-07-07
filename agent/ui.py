@@ -50,9 +50,9 @@ PANEL_ROWS = [
     ("", ""),
     ("Commands", ""),
     ("/help", "menu and examples"),
+    ("/status", "model, sources, tools"),
     ("/think off", "hide timed execution trace"),
-    ("/resolve minimax", "find ticker candidates"),
-    ("/quote AAPL", "fast market snapshot"),
+    ("/quality AAPL", "research quality gate"),
 ]
 
 
@@ -67,6 +67,8 @@ finance-agent 功能菜单
     这里只展示可审计的执行摘要，不展示隐藏推理链。
   /selfcheck 或 --selfcheck
     运行工具注册、后端和主循环自检。
+  /status
+    显示模型、base URL、工具数、数据源、thinking 状态和 License。
   /clear
     清空当前会话上下文。
   /exit
@@ -95,6 +97,8 @@ finance-agent 功能菜单
     计算技术指标。
   /report AAPL 1y
     生成结构化股票研究报告。
+  /quality AAPL 1y
+    运行研究质量门禁和去劣初筛，输出信息丰富度、数据缺口、快速否决/重审信号和下一步核验。
   /compare NVDA AMD 1y
     对比多只股票。
   /debate NVDA AMD 1y
@@ -148,6 +152,12 @@ finance-agent 功能菜单
 
 Trace2Skill 自进化：
   可把成功任务轨迹沉淀成新的 skills/<name>/SKILL.md。
+
+研究质量门禁：
+  - 信息丰富度 A/B/C
+  - 数据完整性和来源风险
+  - 快速否决/重审信号
+  - 下一步核验清单
 
 数据源：
   Alpha Vantage、Tushare、AKShare、Yahoo Finance、SAMPLE_FALLBACK。
