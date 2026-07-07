@@ -3,14 +3,15 @@ from __future__ import annotations
 
 from finance.web import web_fetch, web_search
 from .base import Tool
+from .security import untrusted_block
 
 
 def _web_search(query: str, limit: int = 5) -> str:
-    return web_search(query, limit)
+    return untrusted_block("WEB_SEARCH", query, web_search(query, limit))
 
 
 def _web_fetch(url: str, max_chars: int = 4000) -> str:
-    return web_fetch(url, max_chars)
+    return untrusted_block("WEB", url, web_fetch(url, max_chars))
 
 
 web_search_tool = Tool(

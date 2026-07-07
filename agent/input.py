@@ -15,6 +15,8 @@ DEFAULT_COMMANDS = [
     "/clear",
     "/exit",
     "/status",
+    "/security",
+    "/mcp",
     "/quote ",
     "/quality ",
     "/history ",

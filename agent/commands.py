@@ -11,6 +11,7 @@ from urllib.parse import urlsplit
 from finance.agent import FinanceResearchAgent
 from finance.data import ProviderError
 from finance.web import web_fetch, web_search
+from tools.security import safety_summary
 from tools.base import ToolRegistry
 
 
@@ -60,6 +61,10 @@ class CommandRouter:
             return CommandResult(True, self._tools())
         if command == "/status":
             return CommandResult(True, self._status(think_enabled))
+        if command == "/security":
+            return CommandResult(True, safety_summary())
+        if command == "/mcp":
+            return CommandResult(True, self._mcp())
         if command == "/sources":
             return CommandResult(True, self._sources())
         if command == "/search":
@@ -196,11 +201,21 @@ class CommandRouter:
             f"- 模型: {os.environ.get('DEEPSEEK_MODEL', '未配置')}",
             f"- Base URL: {_safe_base_url(os.environ.get('DEEPSEEK_BASE_URL', ''))}",
             f"- 工具数: {len(self.registry)}",
+            f"- MCP 工具: {', '.join(self._mcp_tool_names()) or '未接入'}",
             f"- thinking: {'on' if think_enabled else 'off'}（默认 on，展示时间/耗时/工具摘要）",
             f"- 数据源: {', '.join(enabled_sources) if enabled_sources else '无可用真实数据源'}",
             "- License: MIT",
             "- 边界: research only, no auto trading",
         ])
+
+    def _mcp(self) -> str:
+        names = self._mcp_tool_names()
+        if not names:
+            return "MCP: 未发现已注册 MCP 工具。"
+        return "MCP 已接入工具：\n" + "\n".join(f"- {name}" for name in names)
+
+    def _mcp_tool_names(self) -> list[str]:
+        return [name for name in self.registry.names() if name.startswith("mcp__")]
 
     def _sources(self) -> str:
         diagnostics = self.finance.provider.diagnostics()

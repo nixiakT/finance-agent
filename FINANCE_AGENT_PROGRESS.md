@@ -107,10 +107,18 @@
 - [x] 参考 AI Berkshire 的研究纪律，增加信息丰富度 A/B/C、数据缺口、快速否决/重审信号和下一步核验。
 - [x] 增加 `finance_quality_screen` 工具和 `/quality` 命令，用于研究质量门禁和去劣初筛。
 - [x] 增加 `/status` 命令，快速展示模型、base URL、工具数、数据源、thinking 状态和 License。
+- [x] 补齐 Demo Day 必考通用工具：`read/write/bash/edit/grep/glob/task_list`。
+- [x] 实现最小 stdio MCP client，默认接入 echo server，并注册 `mcp__echo`。
+- [x] 增加安全层：工作区路径限制、敏感路径拦截、危险命令拦截、疑似 secret 写入拦截、不可信内容隔离。
+- [x] 增加 `/mcp` 和 `/security` 命令，方便现场展示扩展能力和安全策略。
+- [x] 增加技术文档 `docs/TECHNICAL_DESIGN.md` 和消融实验报告 `docs/ABLATION_REPORT.md`。
 
 ## 已实现功能
 
 - 数据层：`ProviderChain`，支持 Alpha Vantage、Tushare、AKShare、Yahoo Finance public endpoints 和样例 fallback。
+- 通用工具层：`read/write/bash/edit/grep/glob/task_list`，用于现场随机代码任务。
+- MCP：最小 JSON-RPC stdio client 和 `mcp__echo` 工具已透明并入默认工具注册表。
+- 安全层：`tools/security.py` 统一处理路径、写入、shell 和不可信内容边界。
 - 行情：`finance_get_quote`。
 - 历史价格：`finance_get_price_history`，支持摘要和 CSV。
 - 基本面：`finance_get_financials`。

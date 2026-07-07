@@ -16,6 +16,9 @@
 - 策略辅助：移动均线交叉策略回测。
 - 自选股简报：批量生成跟踪摘要。
 - Trace2Skill：把成功任务轨迹沉淀为项目 Skill。
+- 通用 Agent 工具：read/write/bash/edit/grep/glob/task_list，支持现场随机代码任务。
+- MCP：最小 stdio client 已接入 echo server，MCP 工具以 `mcp__` 前缀透明并入主循环。
+- 安全层：工作区权限、危险命令拦截、疑似 secret 写入拦截、不可信内容隔离。
 
 ## 快速开始
 
@@ -53,6 +56,8 @@ python -m agent.cli "生成我的自选股每日简报：AAPL, MSFT, NVDA"
 ```text
 /think on | /think off       开关高层执行轨迹，默认开启，展示时间、耗时和工具摘要
 /status                      查看模型、数据源、工具数、thinking 状态和 License
+/mcp                         查看已接入 MCP 工具
+/security                    查看权限分层和注入防护策略
 /resolve minimax             解析公司名/简称到 A 股、港股、美股候选代码
 /quote AAPL                  查询行情
 /quality AAPL 1y             研究质量门禁和去劣初筛
@@ -120,6 +125,7 @@ FINANCE_ALLOW_SAMPLE_FALLBACK=0
 - 本项目只做研究辅助，不做自动交易。
 - 输出必须区分事实、推断、风险和数据缺口。
 - 研究报告会包含质量门禁，但通过门禁不代表可以买入，只表示数据更适合继续研究。
+- 本地工具有安全层：越界路径、敏感文件、危险命令、疑似密钥写入会被拦截。
 - 回测不包含滑点、手续费、税费、分红复权和真实成交约束。
 - 免费数据源可能延迟、限流或缺失字段。
 - 网页抓取遇到 WAF/JS challenge 时只会标注限制，不会假装读取完整正文。
@@ -135,5 +141,7 @@ python -m compileall agent backend finance skills tools trace2skill
 python -m agent.cli --selfcheck
 python -m pytest
 ```
+
+技术文档见 [docs/TECHNICAL_DESIGN.md](docs/TECHNICAL_DESIGN.md)，消融实验见 [docs/ABLATION_REPORT.md](docs/ABLATION_REPORT.md)。
 
 项目进度和历史决策见 [FINANCE_AGENT_PROGRESS.md](FINANCE_AGENT_PROGRESS.md)。

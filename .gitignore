@@ -7,6 +7,7 @@ out-*/
 *.gguf
 *.zip
 .DS_Store
+.agent_task_list
 .env
 .env.*
 !.env.example

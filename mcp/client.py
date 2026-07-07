@@ -13,6 +13,7 @@ MCP（Model Context Protocol）让工具集从"写死在代码里"变成"可插�
 from __future__ import annotations
 import json
 import subprocess
+import sys
 from typing import Any
 
 from tools.base import Tool, ToolRegistry
@@ -25,20 +26,64 @@ class MCPClient:
         self._id = 0
 
     def start(self) -> None:
-        # TODO[Day8] 启动子进程，stdin/stdout 接管，做 initialize 握手
-        raise NotImplementedError("Day8：实现 stdio transport + initialize")
+        self.proc = subprocess.Popen(
+            self.command,
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            bufsize=1,
+        )
+        self._rpc("initialize", {
+            "protocolVersion": "2024-11-05",
+            "clientInfo": {"name": "finance-agent", "version": "0.1"},
+            "capabilities": {},
+        })
+        self._notify("notifications/initialized", {})
 
     def _rpc(self, method: str, params: dict | None = None) -> Any:
-        # TODO[Day8] 发一条 JSON-RPC 请求（带自增 id），读回对应响应
-        raise NotImplementedError("Day8：实现 JSON-RPC 收发")
+        if self.proc is None or self.proc.stdin is None or self.proc.stdout is None:
+            raise RuntimeError("MCP client not started")
+        self._id += 1
+        rid = self._id
+        request = {"jsonrpc": "2.0", "id": rid, "method": method, "params": params or {}}
+        self.proc.stdin.write(json.dumps(request, ensure_ascii=False) + "\n")
+        self.proc.stdin.flush()
+        while True:
+            line = self.proc.stdout.readline()
+            if not line:
+                stderr = self.proc.stderr.read() if self.proc.stderr else ""
+                raise RuntimeError(f"MCP server closed stdout. stderr={stderr}")
+            response = json.loads(line)
+            if response.get("id") != rid:
+                continue
+            if response.get("error"):
+                raise RuntimeError(response["error"])
+            return response.get("result")
+
+    def _notify(self, method: str, params: dict | None = None) -> None:
+        if self.proc is None or self.proc.stdin is None:
+            raise RuntimeError("MCP client not started")
+        request = {"jsonrpc": "2.0", "method": method, "params": params or {}}
+        self.proc.stdin.write(json.dumps(request, ensure_ascii=False) + "\n")
+        self.proc.stdin.flush()
 
     def list_tools(self) -> list[dict]:
-        # TODO[Day8] 调 tools/list，返回工具描述列表
-        raise NotImplementedError("Day8：实现 tools/list")
+        result = self._rpc("tools/list", {})
+        return list(result.get("tools", []))
 
     def call_tool(self, name: str, arguments: dict) -> str:
-        # TODO[Day8] 调 tools/call，返回结果文本
-        raise NotImplementedError("Day8：实现 tools/call")
+        result = self._rpc("tools/call", {"name": name, "arguments": arguments})
+        content = result.get("content", [])
+        parts = []
+        for item in content:
+            if item.get("type") == "text":
+                parts.append(str(item.get("text", "")))
+        return "\n".join(parts)
+
+    def close(self) -> None:
+        if self.proc is not None:
+            self.proc.terminate()
 
 
 def register_mcp_tools(registry: ToolRegistry, client: MCPClient) -> None:
@@ -51,3 +96,7 @@ def register_mcp_tools(registry: ToolRegistry, client: MCPClient) -> None:
             parameters=spec.get("inputSchema", {"type": "object", "properties": {}}),
             run=lambda _n=name, **kw: client.call_tool(_n, kw),
         ))
+
+
+def default_echo_client() -> MCPClient:
+    return MCPClient([sys.executable, "-m", "mcp.echo_server"])

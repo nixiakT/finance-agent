@@ -69,6 +69,10 @@ finance-agent 功能菜单
     运行工具注册、后端和主循环自检。
   /status
     显示模型、base URL、工具数、数据源、thinking 状态和 License。
+  /mcp
+    显示已透明并入主循环的 MCP 工具。
+  /security
+    显示权限分层、危险命令拦截和不可信内容隔离策略。
   /clear
     清空当前会话上下文。
   /exit
@@ -111,6 +115,10 @@ finance-agent 功能菜单
     列出已注册工具。
   /sources
     查看当前数据源优先级。
+  /mcp
+    查看 MCP 工具，例如 mcp__echo。
+  /security
+    查看安全层策略。
   /search 智谱 02513 股票
     搜索公开网页，用于核验标的、上市状态、公告和新闻来源。
   /fetch https://xueqiu.com/S/02513

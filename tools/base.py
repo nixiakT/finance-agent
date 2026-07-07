@@ -60,23 +60,32 @@ def build_default_registry() -> ToolRegistry:
     """组装内置工具。随课程推进逐步取消注释。"""
     reg = ToolRegistry()
     from .finance_tools import finance_tools
+    from .fs import read_tool, write_tool
+    from .more_tools import edit_tool, glob_tool, grep_tool, task_list_tool
+    from .shell import bash_tool
     from .trace2skill_tools import trace2skill_tools
     from .web_tools import web_tools
 
-    for tool in [*finance_tools, *trace2skill_tools, *web_tools]:
+    for tool in [
+        read_tool,
+        write_tool,
+        bash_tool,
+        edit_tool,
+        grep_tool,
+        glob_tool,
+        task_list_tool,
+        *finance_tools,
+        *trace2skill_tools,
+        *web_tools,
+    ]:
         reg.register(tool)
 
-    # TODO[Day5] 取消注释并实现：
-    # from .fs import read_tool, write_tool
-    # from .shell import bash_tool
-    # for t in (read_tool, write_tool, bash_tool):
-    #     reg.register(t)
-    #
-    # TODO[Day6] 再加入完整工具集（→ v1 里程碑）：
-    # from .more_tools import edit_tool, grep_tool, glob_tool
-    # for t in (edit_tool, grep_tool, glob_tool):
-    #     reg.register(t)
-    #
-    # TODO[Day7] 再加入：
-    # from .more_tools import web_fetch_tool, task_list_tool
+    try:
+        from mcp.client import default_echo_client, register_mcp_tools
+
+        client = default_echo_client()
+        client.start()
+        register_mcp_tools(reg, client)
+    except Exception:
+        pass
     return reg
