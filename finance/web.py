@@ -9,6 +9,7 @@ from urllib.parse import parse_qs, unquote, urlparse
 
 import httpx
 
+from .http import client as http_client
 from .symbols import extract_symbols, normalize_symbol, to_yahoo_symbol
 
 
@@ -27,7 +28,7 @@ def web_search(query: str, limit: int = 5) -> str:
     search_url = ""
     search_error = ""
     try:
-        with httpx.Client(timeout=20.0, follow_redirects=True, headers=_headers()) as client:
+        with http_client(timeout=20.0, follow_redirects=True, headers=_headers()) as client:
             response = client.get("https://html.duckduckgo.com/html/", params={"q": cleaned})
             search_url = str(response.url)
             response.raise_for_status()
@@ -76,7 +77,7 @@ def web_fetch(url: str, max_chars: int = 4000) -> str:
         raise ValueError("只支持 http/https URL")
 
     try:
-        with httpx.Client(timeout=20.0, follow_redirects=True, headers=_headers()) as client:
+        with http_client(timeout=20.0, follow_redirects=True, headers=_headers()) as client:
             response = client.get(cleaned)
     except httpx.RequestError as exc:
         return "\n".join([

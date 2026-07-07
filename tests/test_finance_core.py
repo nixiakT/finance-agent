@@ -22,6 +22,16 @@ def test_symbol_normalization_handles_common_markets() -> None:
     assert normalize_symbol("600519") == "600519.SS"
     assert to_yahoo_symbol("02513.HK") == "2513.HK"
     assert extract_symbols("比较 智谱 和 AAPL 最近走势")[:2] == ["02513.HK", "AAPL"]
+    assert normalize_symbol("SpaceX") == "SPCX"
+    assert extract_symbols("SpaceX 最近情况如何")[0] == "SPCX"
+
+
+def test_finance_http_proxy_is_applied(monkeypatch: pytest.MonkeyPatch) -> None:
+    import finance.http as finance_http
+
+    monkeypatch.setenv("FINANCE_HTTP_PROXY", "http://127.0.0.1:7897")
+
+    assert finance_http.proxy_label() == "http://127.0.0.1:7897"
 
 
 def test_resolve_symbol_uses_yahoo_search_for_company_names(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -46,6 +56,7 @@ def test_resolve_symbol_uses_yahoo_search_for_company_names(monkeypatch: pytest.
 
     assert resolve_symbol("minimax").symbol == "0100.HK"
     assert resolve_symbol("nvidia").symbol == "NVDA"
+    assert resolve_symbol("SpaceX").symbol == "SPCX"
 
 
 def test_resolve_symbol_uses_eastmoney_for_cn_hk_us_names(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -145,6 +156,7 @@ def test_route_task_selects_market_update_for_today_question(monkeypatch: pytest
     output = agent.route_task("看看智谱今天的情况")
 
     assert "# 今日市场核验" in output
+    assert "上市状态与代码核验" in output
     assert "公开网页核验" in output
     assert "02513.HK" in output
 

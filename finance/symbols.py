@@ -26,6 +26,8 @@ CHINESE_SYMBOLS = {
     "智谱ai": "02513.HK",
     "智谱清言": "02513.HK",
     "knowledge atlas": "02513.HK",
+    "spacex": "SPCX",
+    "space x": "SPCX",
 }
 
 
@@ -99,6 +101,7 @@ def extract_symbols(text: str) -> list[str]:
     ignored = {
         "MA", "MACD", "RSI", "PE", "EPS", "ROE", "ETF", "API", "MVP", "CSV",
         "HTTP", "HTTPS", "URL", "WWW", "COM", "AI", "AGENT", "DAY", "BUY", "SELL",
+        "IPO",
     }
     for match in pattern.finditer(text_without_urls):
         token = match.group(0)

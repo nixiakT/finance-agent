@@ -7,6 +7,7 @@ from typing import Any
 
 import httpx
 
+from .http import get as http_get
 from .symbols import CHINESE_SYMBOLS, normalize_symbol
 
 
@@ -119,7 +120,7 @@ def _looks_like_name(raw: str) -> bool:
 
 def _yahoo_candidates(query: str) -> list[SymbolCandidate]:
     try:
-        response = httpx.get(
+        response = http_get(
             "https://query2.finance.yahoo.com/v1/finance/search",
             params={"q": query, "quotesCount": "12", "newsCount": "0"},
             headers={"User-Agent": USER_AGENT, "Accept": "application/json,text/plain,*/*"},
@@ -147,7 +148,7 @@ def _yahoo_candidates(query: str) -> list[SymbolCandidate]:
 
 def _eastmoney_candidates(query: str) -> list[SymbolCandidate]:
     try:
-        response = httpx.get(
+        response = http_get(
             "https://searchapi.eastmoney.com/api/suggest/get",
             params={
                 "input": query,
@@ -229,7 +230,7 @@ def _akshare_candidates(query: str) -> list[SymbolCandidate]:
 
 def _web_candidates(query: str) -> list[SymbolCandidate]:
     try:
-        response = httpx.get(
+        response = http_get(
             "https://html.duckduckgo.com/html/",
             params={"q": f"{query} 股票代码 stock ticker"},
             headers={"User-Agent": USER_AGENT},

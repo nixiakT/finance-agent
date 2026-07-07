@@ -33,8 +33,10 @@ python -m agent.cli
 
 ```text
 finance-agent > /help
+finance-agent > /lang en
 finance-agent > 分析一下 AAPL 最近三个月走势
 finance-agent > /think off
+finance-agent > /proxy test
 finance-agent > /quote AAPL
 finance-agent > /search 智谱 02513 股票
 finance-agent > /fetch https://xueqiu.com/S/02513
@@ -55,7 +57,9 @@ python -m agent.cli "生成我的自选股每日简报：AAPL, MSFT, NVDA"
 
 ```text
 /think on | /think off       开关高层执行轨迹，默认开启，展示时间、耗时和工具摘要
+/lang zh | /lang en          切换 CLI 交互语言
 /status                      查看模型、数据源、工具数、thinking 状态和 License
+/proxy status/test/set/off   查看、测试、临时设置或关闭网页/行情查询代理
 /mcp                         查看已接入 MCP 工具
 /security                    查看权限分层和注入防护策略
 /resolve minimax             解析公司名/简称到 A 股、港股、美股候选代码
@@ -81,9 +85,39 @@ python -m agent.cli "生成我的自选股每日简报：AAPL, MSFT, NVDA"
 
 CLI 默认展示 Claude Code 风格的高层 `thinking` 轨迹，包括模型回合、工具选择、工具参数摘要、结果预览、时间戳和耗时。它是可审计执行摘要，不是隐藏推理链；需要安静输出时可输入 `/think off`。
 
-## 配置
+## 代理与语言
+
+如果本机使用 Clash/Mihomo，截图里的混合代理端口是 `7897`，可以在 `.env.local` 中配置：
+
+```bash
+FINANCE_HTTP_PROXY=http://127.0.0.1:7897
+```
+
+也可以在交互模式临时设置：
+
+```text
+/proxy set http://127.0.0.1:7897
+/proxy test
+```
+
+CLI 支持中英文切换：
+
+```bash
+FINANCE_AGENT_LANG=en python -m agent.cli /help
+```
+
+交互模式中也可以输入：
+
+```text
+/lang zh
+/lang en
+```
+
+## Configuration
 
 没有配置 `DEEPSEEK_API_KEY` 时，系统会使用 `FakeBackend`，并把金融任务路由到本地 `finance_route_task`，方便离线演示。配置真模型后，Agent 会使用 OpenAI-compatible chat completions 接口选择工具和组织答案。
+
+为了避免模型旧知识误判新上市、改名或跨市场标的，单次命令和交互会话里的自然语言金融问题会先进入确定性 `finance_route_task`：先解析代码、核验公开网页和行情，再组织报告；普通开发任务仍走 ReAct 主循环。
 
 ```bash
 cp .env.example .env.local
@@ -98,6 +132,8 @@ DEEPSEEK_MODEL=deepseek-chat
 ALPHAVANTAGE_API_KEY=...
 TUSHARE_TOKEN=...
 FINANCE_ALLOW_SAMPLE_FALLBACK=1
+FINANCE_HTTP_PROXY=http://127.0.0.1:7897
+FINANCE_AGENT_LANG=zh
 ```
 
 `.env.local` 已被 `.gitignore` 忽略。不要把 API key、token、cookie 写进代码或文档。
@@ -119,6 +155,42 @@ FINANCE_ALLOW_SAMPLE_FALLBACK=0
 ```
 
 港股代码会区分展示代码和数据源查询代码。例如公开页面常显示 `智谱(02513)`，Yahoo Finance 查询使用 `2513.HK`；MiniMax 常见展示代码 `00100.HK`，Yahoo 查询使用 `0100.HK`。报告里会保留展示代码并说明查询代码。
+
+美股新上市或刚改名标的必须先做公开网页核验，再查行情。例如 `SpaceX` 会解析为 `SPCX`，可用：
+
+```bash
+python -m agent.cli /resolve SpaceX
+python -m agent.cli /search "SpaceX SPCX Nasdaq IPO"
+python -m agent.cli /quote SPCX
+python -m agent.cli "SpaceX 最近情况如何"
+```
+
+## English Quick Start
+
+```bash
+pip install -r requirements.txt
+cp .env.example .env.local
+FINANCE_AGENT_LANG=en python -m agent.cli --selfcheck
+FINANCE_AGENT_LANG=en python -m agent.cli /help
+FINANCE_AGENT_LANG=en python -m agent.cli "Analyze recent SpaceX / SPCX developments"
+```
+
+Optional proxy for Clash/Mihomo:
+
+```bash
+FINANCE_HTTP_PROXY=http://127.0.0.1:7897
+```
+
+Useful commands:
+
+```text
+/lang en
+/proxy test
+/resolve SpaceX
+/quote SPCX
+/report AAPL 1y
+/quality AAPL 1y
+```
 
 ## 边界
 

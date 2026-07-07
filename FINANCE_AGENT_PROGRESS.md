@@ -112,6 +112,10 @@
 - [x] 增加安全层：工作区路径限制、敏感路径拦截、危险命令拦截、疑似 secret 写入拦截、不可信内容隔离。
 - [x] 增加 `/mcp` 和 `/security` 命令，方便现场展示扩展能力和安全策略。
 - [x] 增加技术文档 `docs/TECHNICAL_DESIGN.md` 和消融实验报告 `docs/ABLATION_REPORT.md`。
+- [x] 增加可配置 HTTP 代理：`FINANCE_HTTP_PROXY` 和 `/proxy status/test/set/off`，网页搜索、抓取、Yahoo、Eastmoney 等查询统一走代理。
+- [x] 修复 SpaceX 最新上市核验路径：`SpaceX` 解析为 `SPCX`，市场更新增加“上市状态与代码核验”段落。
+- [x] CLI 支持中英文切换：`FINANCE_AGENT_LANG=zh|en` 和 `/lang zh|en`；README 增加 English Quick Start。
+- [x] 单次和交互自然语言金融查询优先走确定性 `finance_route_task`，防止新上市/改名标的被模型旧知识误判；普通开发任务仍走 ReAct 主循环。
 
 ## 已实现功能
 
@@ -131,6 +135,7 @@
 - 策略回测：`finance_backtest_strategy`，第一版支持移动均线交叉。
 - 自选股简报：`finance_daily_brief`。
 - 离线路由：未配置真模型时，`FakeBackend` 会用 `finance_route_task` 跑通金融 Demo。
+- 确定性金融路由：配置真模型时，自然语言金融查询也会先走 `finance_route_task` 做标的解析、网页核验、行情、技术面和新闻，再输出报告。
 - Skill：`skills/finance-stock/SKILL.md` 规定金融分析边界和流程。
 - Trace2Skill：`skills/trace2skill/SKILL.md` 和 `trace2skill_generate` 支持从成功轨迹生成新 Skill。
 - CLI 欢迎页：`python -m agent.cli` 显示招财猫入口。
@@ -143,6 +148,8 @@
 - CLI 命令模式：常用金融工具有对应 slash command，可绕过自然语言路由直接执行。
 - CLI 高层 trace：默认展示模型回合、工具调用、结果摘要、时间戳和耗时，不输出隐藏推理链；可用 `/think off` 关闭。
 - CLI 状态面板：`/status` 展示模型、数据源、工具数、thinking 和 License。
+- CLI 代理诊断：`/proxy test` 可验证 Clash/Mihomo 等本地代理是否可用。
+- CLI 双语界面：欢迎页和 `/help` 支持中文/英文。
 - CLI 行编辑：支持历史记录、方向键、删除键、常见 Emacs 快捷键和命令补全。
 - CLI 输入清洗：误粘贴 `finance-agent >` 前缀时会自动剥离。
 - 标的核验：自然语言包含“标的/代码/上市”等问题时，先做公开网页搜索，再做行情核验。

@@ -17,6 +17,8 @@ DEFAULT_COMMANDS = [
     "/status",
     "/security",
     "/mcp",
+    "/proxy ",
+    "/lang ",
     "/quote ",
     "/quality ",
     "/history ",

@@ -65,10 +65,14 @@ finance-agent 功能菜单
   /think on | /think off
     开关高层执行轨迹。默认开启，显示时间、耗时、模型回合、工具名、参数和结果摘要。
     这里只展示可审计的执行摘要，不展示隐藏推理链。
+  /lang zh | /lang en
+    切换 CLI 交互语言。也可以设置 FINANCE_AGENT_LANG=zh 或 en。
   /selfcheck 或 --selfcheck
     运行工具注册、后端和主循环自检。
   /status
     显示模型、base URL、工具数、数据源、thinking 状态和 License。
+  /proxy status | /proxy test | /proxy set http://127.0.0.1:7897 | /proxy off
+    查看、测试、临时设置或关闭网页/行情查询代理。
   /mcp
     显示已透明并入主循环的 MCP 工具。
   /security
@@ -176,6 +180,62 @@ Trace2Skill 自进化：
 """.strip()
 
 
+HELP_EN = """
+finance-agent command menu
+
+Basics:
+  /help
+    Show this menu.
+  /lang zh | /lang en
+    Switch CLI language for the current process.
+  /think on | /think off
+    Toggle visible high-level execution trace. It shows timestamps, elapsed time, model turns, tool names, arguments and result previews.
+  /status
+    Show model, base URL, proxy, tool count, data sources, thinking state and License.
+  /proxy status | /proxy test | /proxy set http://127.0.0.1:7897 | /proxy off
+    Inspect, test or set the HTTP proxy used by market/web lookup calls.
+  /mcp
+    Show MCP tools merged into the agent loop.
+  /security
+    Show permission and prompt-injection safety policy.
+  /clear
+    Clear session context.
+  /exit
+    Exit interactive mode.
+
+Research commands:
+  /resolve spacex
+    Resolve company name or ticker across US/HK/A-share markets.
+  /quote SPCX
+    Get quote snapshot.
+  /history AAPL 1y
+    Price history and indicator summary.
+  /financials AAPL
+    Fundamentals and valuation summary.
+  /news AAPL 5
+    Related news.
+  /report AAPL 1y
+    Structured stock research report.
+  /quality AAPL 1y
+    Research quality gate: information grade, data gaps, red flags and next checks.
+  /compare NVDA AMD 1y
+    Compare stocks.
+  /debate NVDA AMD 1y
+    Multi-agent stock debate.
+  /backtest TSLA 20 60 2y
+    Backtest MA crossover strategy.
+  /brief AAPL MSFT NVDA
+    Watchlist brief.
+  /search SpaceX SPCX IPO
+    Public web verification.
+  /fetch https://example.com
+    Fetch a URL and summarize it.
+
+Boundary:
+  Research only. No auto trading, no return promises, no deterministic buy/sell instructions.
+""".strip()
+
+
 def render_welcome() -> str:
     lines: list[str] = []
     title = " Finance Agent v0.3.1 · stock research workspace "
@@ -190,16 +250,21 @@ def render_welcome() -> str:
     lines.append(_panel_line(_muted(str(Path.cwd())), _right_cell("Session", _session_id())))
     lines.append(_panel_line(_muted("research only · no auto trading"), _right_cell("Boundary", "facts, inference, risk")))
     lines.append(_panel_line("", ""))
-    lines.append(_panel_line(_accent("Ask") + "  分析一下 AAPL 最近三个月走势", _accent("/help") + " commands  " + _muted("↑/↓ history")))
+    ask = "Analyze AAPL over the last 3 months" if current_lang() == "en" else "分析一下 AAPL 最近三个月走势"
+    lines.append(_panel_line(_accent("Ask") + "  " + ask, _accent("/help") + " commands  " + _muted("↑/↓ history")))
     lines.append(_color("╰" + "─" * WIDTH + "╯", "gold"))
     lines.append("")
-    lines.append(_accent("Welcome to Finance Agent.") + " Type your message or /help for commands.")
-    lines.append(_muted("Tip: 数据优先标注来源和时间；SAMPLE_FALLBACK 只用于演示。"))
+    if current_lang() == "en":
+        lines.append(_accent("Welcome to Finance Agent.") + " Type your message or /help for commands.")
+        lines.append(_muted("Tip: reports label source/time; SAMPLE_FALLBACK is demo-only."))
+    else:
+        lines.append(_accent("Welcome to Finance Agent.") + " Type your message or /help for commands.")
+        lines.append(_muted("Tip: 数据优先标注来源和时间；SAMPLE_FALLBACK 只用于演示。"))
     return "\n".join(lines)
 
 
 def render_help() -> str:
-    return HELP
+    return HELP_EN if current_lang() == "en" else HELP
 
 
 def render_prompt() -> str:
@@ -341,6 +406,12 @@ def _truncate_display(text: str, width: int) -> str:
 
 def _session_id() -> str:
     return datetime.now().strftime("%Y%m%d_%H%M%S")
+
+
+def current_lang() -> str:
+    load_local_env()
+    value = os.environ.get("FINANCE_AGENT_LANG", "zh").strip().lower()
+    return "en" if value.startswith("en") else "zh"
 
 
 def _format_elapsed(seconds: float) -> str:

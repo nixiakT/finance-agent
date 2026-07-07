@@ -20,6 +20,7 @@ from typing import Any
 import httpx
 
 from config import load_local_env
+from finance.http import client as http_client
 
 
 class DeepSeekBackend:
@@ -34,7 +35,7 @@ class DeepSeekBackend:
         self.model = model or os.environ.get("DEEPSEEK_MODEL", "deepseek-chat")
         if not self.api_key:
             raise RuntimeError("缺少 DEEPSEEK_API_KEY 环境变量")
-        self._client = httpx.Client(timeout=timeout)
+        self._client = http_client(timeout=timeout, follow_redirects=True)
 
     def chat(self, messages: list[dict[str, Any]], tools: list[dict] | None = None,
              temperature: float = 0.0) -> dict[str, Any]:

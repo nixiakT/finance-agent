@@ -7,6 +7,7 @@
 from __future__ import annotations
 import argparse
 import json
+import re
 import sys
 from time import perf_counter
 
@@ -14,6 +15,19 @@ from tools.base import build_default_registry
 from agent.input import InteractiveInput, clean_user_input
 from agent.prompts import SYSTEM_PROMPT
 from agent.ui import render_help, render_prompt, render_trace, render_welcome
+
+
+FINANCE_TEXT_HINTS = (
+    "股票", "股价", "行情", "走势", "财报", "估值", "回测", "选股", "辩论",
+    "自选股", "标的", "上市", "港股", "美股", "概念股", "基本面", "技术面",
+    "市盈率", "成交量", "财务", "均线", "智谱", "贵州茅台",
+)
+
+FINANCE_WORD_HINTS = (
+    "quote", "stock", "ticker", "price", "listed", "ipo", "nasdaq", "nyse", "hkex",
+    "spacex", "minimax", "spcx", "nvda", "amd", "aapl", "tsla", "msft",
+    "pe", "eps", "roe", "rsi", "macd", "ma20", "ma60",
+)
 
 
 def build_system_prompt() -> str:
@@ -144,6 +158,7 @@ def make_observer(enabled):
 def interactive() -> int:
     from agent.commands import CommandRouter
     from agent.loop import AgentSession
+    from finance.agent import FinanceResearchAgent
 
     print(render_welcome())
     print()
@@ -151,8 +166,10 @@ def interactive() -> int:
     trace = TracePrinter(lambda: think_enabled)
     agent = build_agent(observer=trace.observe)
     session = AgentSession(agent)
+    finance = FinanceResearchAgent()
     router = CommandRouter(
         agent.registry,
+        finance_agent=finance,
         trace=trace.command,
     )
     input_reader = InteractiveInput(render_prompt())
@@ -190,6 +207,12 @@ def interactive() -> int:
         if command == "help":
             print(render_help())
             continue
+        if _should_route_finance(task):
+            trace.command("tool", f"finance_route_task {_json_preview({'task': task})}")
+            output = finance.route_task(task)
+            trace.command("tool result", f"finance_route_task -> {_preview(output)}")
+            print(output)
+            continue
         print(session.ask(task))
 
 
@@ -222,6 +245,16 @@ def main(argv: list[str] | None = None) -> int:
                 print("bye.")
             return 0
 
+    if _should_route_finance(task):
+        trace = TracePrinter(lambda: True)
+        from finance.agent import FinanceResearchAgent
+
+        trace.command("tool", f"finance_route_task {_json_preview({'task': task})}")
+        output = FinanceResearchAgent().route_task(task)
+        trace.command("tool result", f"finance_route_task -> {_preview(output)}")
+        print(output)
+        return 0
+
     # 真正跑任务：优先用 DeepSeek API；没配 key 时回退到 FakeBackend（离线打通管道）
     trace = TracePrinter(lambda: True)
     agent = build_agent(observer=trace.observe)
@@ -251,6 +284,33 @@ def _split_trace_detail(detail: str) -> tuple[str, str]:
         return "unknown", ""
     name, _, rest = text.partition(" ")
     return name.strip() or "unknown", rest.strip()
+
+
+def _should_route_finance(task: str) -> bool:
+    text = task.strip()
+    if not text or text.startswith("/"):
+        return False
+    lowered = text.lower()
+    compact = re.sub(r"\s+", "", lowered)
+    if any(hint in compact for hint in FINANCE_TEXT_HINTS) or "a股" in compact:
+        return True
+    words = set(re.findall(r"[a-z0-9.]+", lowered))
+    if words.intersection(FINANCE_WORD_HINTS):
+        return True
+    if re.search(r"\b[A-Z]{1,6}(?:\.[A-Z]{1,4})?\b", text) and any(
+        token in text for token in ("分析", "比较", "看看", "查", "今天", "最近", "情况", "走势", "财报")
+    ):
+        return True
+    if any(char.isdigit() for char in text) and any(token in text for token in ("分析", "比较", "看看", "查", "今天", "最近")):
+        return True
+    return False
+
+
+def _preview(text: str, limit: int = 180) -> str:
+    clean = " ".join(str(text).split())
+    if len(clean) <= limit:
+        return clean
+    return clean[:limit] + "..."
 
 
 if __name__ == "__main__":

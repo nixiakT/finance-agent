@@ -15,6 +15,7 @@ from typing import Any, Protocol
 import httpx
 
 from config import load_local_env
+from .http import client as http_client
 from .models import Candle, Financials, NewsItem, Quote, utc_now_iso
 from .symbols import is_a_share, normalize_symbol, to_akshare_symbol, to_tushare_symbol, to_yahoo_symbol
 
@@ -44,7 +45,7 @@ class AlphaVantageProvider:
 
     def __init__(self, api_key: str | None = None, timeout: float = 20.0):
         self.api_key = api_key or os.environ.get("ALPHAVANTAGE_API_KEY", "")
-        self.client = httpx.Client(timeout=timeout, follow_redirects=True)
+        self.client = http_client(timeout=timeout, follow_redirects=True)
 
     def available(self) -> bool:
         return bool(self.api_key)
@@ -149,7 +150,7 @@ class YahooFinanceProvider:
     name = "Yahoo Finance public endpoints"
 
     def __init__(self, timeout: float = 20.0):
-        self.client = httpx.Client(
+        self.client = http_client(
             timeout=timeout,
             follow_redirects=True,
             headers={

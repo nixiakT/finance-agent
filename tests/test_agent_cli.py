@@ -5,7 +5,7 @@ from typing import Any
 
 import pytest
 
-from agent.cli import main
+from agent.cli import _should_route_finance, main
 from agent.commands import CommandRouter
 from agent.context import maybe_compact, truncate_observation
 from agent.loop import AgentLoop
@@ -157,6 +157,27 @@ def test_status_command_reports_runtime_summary(monkeypatch: pytest.MonkeyPatch)
     assert "user:pass" not in output
 
 
+def test_proxy_command_can_set_and_report_proxy(monkeypatch: pytest.MonkeyPatch) -> None:
+    router = CommandRouter(ToolRegistry(), finance_agent=StatusFinance())  # type: ignore[arg-type]
+    monkeypatch.delenv("FINANCE_HTTP_PROXY", raising=False)
+
+    output = router.handle("/proxy set http://127.0.0.1:7897").output
+
+    assert "127.0.0.1:7897" in output
+    assert "127.0.0.1:7897" in router.handle("/proxy status").output
+
+
+def test_lang_command_switches_cli_language(monkeypatch: pytest.MonkeyPatch) -> None:
+    from agent.ui import render_help
+
+    router = CommandRouter(ToolRegistry(), finance_agent=StatusFinance())  # type: ignore[arg-type]
+    monkeypatch.setenv("FINANCE_AGENT_LANG", "zh")
+
+    assert "Language set to English" in router.handle("/lang en").output
+    assert "finance-agent command menu" in render_help()
+    assert "语言已切换为中文" in router.handle("/lang zh").output
+
+
 def test_resolve_command_uses_finance_resolver() -> None:
     class Finance:
         def resolve_symbol(self, query: str) -> str:
@@ -227,6 +248,28 @@ def test_main_handles_single_shot_slash_command_with_args(capsys: Any, monkeypat
     assert "tool result web_search" in output
 
 
+def test_main_routes_natural_finance_task_deterministically(capsys: Any, monkeypatch: pytest.MonkeyPatch) -> None:
+    from finance.agent import FinanceResearchAgent
+
+    monkeypatch.setattr(
+        FinanceResearchAgent,
+        "route_task",
+        lambda self, task: f"routed finance task: {task}",
+    )
+
+    assert main(["SpaceX", "最近情况如何"]) == 0
+
+    output = capsys.readouterr().out
+
+    assert "finance_route_task" in output
+    assert "routed finance task: SpaceX 最近情况如何" in output
+
+
+def test_finance_task_router_does_not_capture_general_dev_tasks() -> None:
+    assert _should_route_finance("SpaceX 最近情况如何")
+    assert not _should_route_finance("open README and replace a heading")
+
+
 class ToolThenAnswerBackend:
     def __init__(self, tool_name: str = "long_tool"):
         self.tool_name = tool_name
@@ -235,3 +278,11 @@ class ToolThenAnswerBackend:
         if messages[-1].get("role") == "tool":
             return {"role": "assistant", "content": messages[-1]["content"], "tool_calls": []}
         return {"role": "assistant", "content": "", "tool_calls": [{"name": self.tool_name, "arguments": {}}]}
+
+
+class StatusFinance:
+    class Provider:
+        def diagnostics(self) -> list[dict[str, str]]:
+            return [{"name": "STATIC", "status": "enabled", "detail": ""}]
+
+    provider = Provider()

@@ -1,6 +1,8 @@
 """High-level finance research facade used by tools and CLI."""
 from __future__ import annotations
 
+import re
+
 from .backtest import backtest_moving_average_cross, format_backtest, parse_strategy
 from .data import ProviderChain, export_history_csv
 from .debate import debate_stocks
@@ -235,8 +237,11 @@ class FinanceResearchAgent:
             "",
             f"- 识别标的: {normalized}",
             "",
-            "## 公开网页核验",
+            "## 上市状态与代码核验",
             web_search(query, 5),
+            "",
+            "## 公开网页核验",
+            web_search(f"{task} {normalized} latest news stock", 5),
             "",
             "## 行情快照",
             self.get_quote(normalized),
@@ -319,6 +324,8 @@ def _verification_query(task: str, symbol: str) -> str:
     terms: list[str] = []
     if "智谱" in task:
         terms.append("智谱")
+    if "spacex" in task.lower():
+        terms.append("SpaceX")
     terms.append(symbol)
     if symbol.endswith(".HK"):
         code = symbol[:-3]
@@ -327,6 +334,8 @@ def _verification_query(task: str, symbol: str) -> str:
         if stripped and stripped != code:
             terms.append(stripped)
     terms.append("股票")
+    if re.search(r"[A-Za-z]", task + symbol):
+        terms.extend(["stock", "ticker", "IPO", "Nasdaq"])
     unique: list[str] = []
     for term in terms:
         if term and term not in unique:

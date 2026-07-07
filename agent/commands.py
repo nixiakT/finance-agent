@@ -10,7 +10,9 @@ from urllib.parse import urlsplit
 
 from finance.agent import FinanceResearchAgent
 from finance.data import ProviderError
+from finance.http import proxy_label, test_connectivity
 from finance.web import web_fetch, web_search
+from agent.ui import current_lang
 from tools.security import safety_summary
 from tools.base import ToolRegistry
 
@@ -52,11 +54,13 @@ class CommandRouter:
         if command in {"/exit", "/quit"}:
             return CommandResult(True, exit=True)
         if command == "/clear":
-            return CommandResult(True, clear=True, output="已清空当前会话上下文。")
+            return CommandResult(True, clear=True, output=_msg("Session context cleared.", "已清空当前会话上下文。"))
         if command == "/selfcheck":
             return CommandResult(True, selfcheck=True)
         if command == "/think":
             return self._think(args, think_enabled)
+        if command == "/lang":
+            return self._lang(args)
         if command == "/tools":
             return CommandResult(True, self._tools())
         if command == "/status":
@@ -65,6 +69,8 @@ class CommandRouter:
             return CommandResult(True, safety_summary())
         if command == "/mcp":
             return CommandResult(True, self._mcp())
+        if command == "/proxy":
+            return CommandResult(True, self._proxy(args))
         if command == "/sources":
             return CommandResult(True, self._sources())
         if command == "/search":
@@ -99,7 +105,10 @@ class CommandRouter:
                 return CommandResult(True, str(exc))
             except ProviderError as exc:
                 return CommandResult(True, f"数据获取失败：{_preview(str(exc), 360)}")
-        return CommandResult(True, f"未知命令：{command}\n输入 /help 查看可用命令。")
+        return CommandResult(True, _msg(
+            f"Unknown command: {command}\nType /help for available commands.",
+            f"未知命令：{command}\n输入 /help 查看可用命令。",
+        ))
 
     def _quote(self, args: list[str]) -> str:
         symbol = _require_arg(args, "/quote AAPL")
@@ -196,12 +205,26 @@ class CommandRouter:
     def _status(self, think_enabled: bool) -> str:
         diagnostics = self.finance.provider.diagnostics()
         enabled_sources = [row["name"] for row in diagnostics if row.get("status") == "enabled"]
+        if current_lang() == "en":
+            return "\n".join([
+                "Finance Agent status:",
+                f"- Model: {os.environ.get('DEEPSEEK_MODEL', 'not configured')}",
+                f"- Base URL: {_safe_base_url(os.environ.get('DEEPSEEK_BASE_URL', ''))}",
+                f"- Tools: {len(self.registry)}",
+                f"- MCP tools: {', '.join(self._mcp_tool_names()) or 'not connected'}",
+                f"- Proxy: {proxy_label()}",
+                f"- thinking: {'on' if think_enabled else 'off'} (default on; shows time/elapsed/tool summaries)",
+                f"- Data sources: {', '.join(enabled_sources) if enabled_sources else 'no real source enabled'}",
+                "- License: MIT",
+                "- Boundary: research only, no auto trading",
+            ])
         return "\n".join([
             "Finance Agent 状态：",
             f"- 模型: {os.environ.get('DEEPSEEK_MODEL', '未配置')}",
             f"- Base URL: {_safe_base_url(os.environ.get('DEEPSEEK_BASE_URL', ''))}",
             f"- 工具数: {len(self.registry)}",
             f"- MCP 工具: {', '.join(self._mcp_tool_names()) or '未接入'}",
+            f"- Proxy: {proxy_label()}",
             f"- thinking: {'on' if think_enabled else 'off'}（默认 on，展示时间/耗时/工具摘要）",
             f"- 数据源: {', '.join(enabled_sources) if enabled_sources else '无可用真实数据源'}",
             "- License: MIT",
@@ -211,15 +234,46 @@ class CommandRouter:
     def _mcp(self) -> str:
         names = self._mcp_tool_names()
         if not names:
-            return "MCP: 未发现已注册 MCP 工具。"
-        return "MCP 已接入工具：\n" + "\n".join(f"- {name}" for name in names)
+            return _msg("MCP: no registered MCP tools found.", "MCP: 未发现已注册 MCP 工具。")
+        title = _msg("MCP tools:", "MCP 已接入工具：")
+        return title + "\n" + "\n".join(f"- {name}" for name in names)
 
     def _mcp_tool_names(self) -> list[str]:
         return [name for name in self.registry.names() if name.startswith("mcp__")]
 
+    def _proxy(self, args: list[str]) -> str:
+        if not args or args[0].lower() in {"status", "show"}:
+            if current_lang() == "en":
+                return "\n".join([
+                    f"Proxy: {proxy_label()}",
+                    "Set FINANCE_HTTP_PROXY for persistence, for example http://127.0.0.1:7897.",
+                ])
+            return "\n".join([
+                f"Proxy: {proxy_label()}",
+                "配置环境变量 FINANCE_HTTP_PROXY 可持久启用，例如 http://127.0.0.1:7897。",
+            ])
+        action = args[0].lower()
+        if action == "test":
+            url = args[1] if len(args) > 1 else "https://html.duckduckgo.com/html/?q=SpaceX+SPCX"
+            return test_connectivity(url)
+        if action == "set":
+            if len(args) < 2:
+                return "用法：/proxy set http://127.0.0.1:7897"
+            os.environ["FINANCE_HTTP_PROXY"] = args[1]
+            if current_lang() == "en":
+                return f"Proxy set for current process: {proxy_label()}\nFor persistence, write this to .env.local: FINANCE_HTTP_PROXY={args[1]}"
+            return f"当前进程代理已设置为: {proxy_label()}\n如需持久化，请写入 .env.local：FINANCE_HTTP_PROXY={args[1]}"
+        if action in {"off", "disable"}:
+            os.environ.pop("FINANCE_HTTP_PROXY", None)
+            return _msg("FINANCE_HTTP_PROXY disabled for current process.", "当前进程 FINANCE_HTTP_PROXY 已关闭。")
+        return _msg(
+            "Usage: /proxy status | /proxy test [url] | /proxy set http://127.0.0.1:7897 | /proxy off",
+            "用法：/proxy status | /proxy test [url] | /proxy set http://127.0.0.1:7897 | /proxy off",
+        )
+
     def _sources(self) -> str:
         diagnostics = self.finance.provider.diagnostics()
-        lines = ["当前数据源状态："]
+        lines = [_msg("Current data sources:", "当前数据源状态：")]
         for index, row in enumerate(diagnostics, start=1):
             detail = f" - {row['detail']}" if row.get("detail") else ""
             lines.append(f"{index}. {row['name']}: {row['status']}{detail}")
@@ -240,13 +294,25 @@ class CommandRouter:
     def _think(self, args: list[str], think_enabled: bool) -> CommandResult:
         if not args:
             state = "on" if think_enabled else "off"
-            return CommandResult(True, f"thinking 当前状态：{state}")
+            return CommandResult(True, _msg(f"thinking state: {state}", f"thinking 当前状态：{state}"))
         value = args[0].lower()
         if value in {"on", "true", "1"}:
-            return CommandResult(True, "thinking 已开启：会显示时间、耗时、模型回合、工具调用和结果摘要。", think=True)
+            return CommandResult(True, _msg(
+                "thinking enabled: timestamps, elapsed time, model turns, tool calls and result previews are shown.",
+                "thinking 已开启：会显示时间、耗时、模型回合、工具调用和结果摘要。",
+            ), think=True)
         if value in {"off", "false", "0"}:
-            return CommandResult(True, "thinking 已关闭。", think=False)
-        return CommandResult(True, "用法：/think on 或 /think off")
+            return CommandResult(True, _msg("thinking disabled.", "thinking 已关闭。"), think=False)
+        return CommandResult(True, _msg("Usage: /think on or /think off", "用法：/think on 或 /think off"))
+
+    def _lang(self, args: list[str]) -> CommandResult:
+        if not args:
+            return CommandResult(True, f"当前语言 / Current language: {os.environ.get('FINANCE_AGENT_LANG', 'zh')}")
+        value = args[0].lower()
+        if value not in {"zh", "cn", "en"}:
+            return CommandResult(True, "用法：/lang zh 或 /lang en")
+        os.environ["FINANCE_AGENT_LANG"] = "en" if value == "en" else "zh"
+        return CommandResult(True, "Language set to English." if value == "en" else "语言已切换为中文。")
 
     def _trace_tool(self, name: str, arguments: dict) -> None:
         if self.trace:
@@ -291,7 +357,7 @@ def _json_preview(value: object) -> str:
 
 def _safe_base_url(value: str) -> str:
     if not value:
-        return "未配置"
+        return _msg("not configured", "未配置")
     parsed = urlsplit(value)
     if not parsed.netloc:
         return value.split("?")[0]
@@ -303,3 +369,7 @@ def _safe_base_url(value: str) -> str:
     except ValueError:
         port = ""
     return f"{parsed.scheme}://{host}{port}{parsed.path.rstrip('/')}"
+
+
+def _msg(en: str, zh: str) -> str:
+    return en if current_lang() == "en" else zh
