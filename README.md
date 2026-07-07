@@ -30,7 +30,7 @@ python -m agent.cli
 ```text
 finance-agent > /help
 finance-agent > 分析一下 AAPL 最近三个月走势
-finance-agent > /think on
+finance-agent > /think off
 finance-agent > /quote AAPL
 finance-agent > /search 智谱 02513 股票
 finance-agent > /fetch https://xueqiu.com/S/02513
@@ -50,7 +50,7 @@ python -m agent.cli "生成我的自选股每日简报：AAPL, MSFT, NVDA"
 ## 常用命令
 
 ```text
-/think on | /think off       开关高层执行轨迹
+/think on | /think off       开关高层执行轨迹，默认开启，展示时间、耗时和工具摘要
 /resolve minimax             解析公司名/简称到 A 股、港股、美股候选代码
 /quote AAPL                  查询行情
 /history AAPL 1y             历史价格和指标摘要
@@ -70,6 +70,8 @@ python -m agent.cli "生成我的自选股每日简报：AAPL, MSFT, NVDA"
 ```
 
 交互输入使用 `prompt_toolkit`：支持历史记录、光标移动、删除、Ctrl+A/E/U/K 和 slash command 补全。CLI 会自动清理误粘贴的 `finance-agent >` 前缀。
+
+CLI 默认展示 Claude Code 风格的高层 `thinking` 轨迹，包括模型回合、工具选择、工具参数摘要、结果预览、时间戳和耗时。它是可审计执行摘要，不是隐藏推理链；需要安静输出时可输入 `/think off`。
 
 ## 配置
 

@@ -8,6 +8,7 @@ from agent.cli import main
 from agent.commands import CommandRouter
 from agent.context import maybe_compact, truncate_observation
 from agent.loop import AgentLoop
+from agent.ui import render_trace
 from finance.data import ProviderError
 from tools.base import Tool, ToolRegistry
 
@@ -93,6 +94,14 @@ def test_finance_command_surfaces_provider_error_without_traceback() -> None:
     assert "not found" in output
 
 
+def test_render_trace_includes_timestamp_and_elapsed() -> None:
+    output = render_trace("tool result finance_get_quote", "AAPL -> ok", elapsed=1.234, timestamp="09:08:07")
+
+    assert "thinking 09:08:07 +1.23s" in output
+    assert "tool result finance_get_quote" in output
+    assert "AAPL -> ok" in output
+
+
 def test_main_handles_single_shot_slash_command(capsys: Any) -> None:
     assert main(["/tools"]) == 0
 
@@ -113,6 +122,9 @@ def test_main_handles_single_shot_slash_command_with_args(capsys: Any, monkeypat
 
     assert "搜索: 智谱 02513 股票" in output
     assert "02513" in output
+    assert "thinking" in output
+    assert "tool web_search" in output
+    assert "tool result web_search" in output
 
 
 class ToolThenAnswerBackend:

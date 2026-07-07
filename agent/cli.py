@@ -6,7 +6,9 @@
 """
 from __future__ import annotations
 import argparse
+import json
 import sys
+from time import perf_counter
 
 from tools.base import build_default_registry
 from agent.input import InteractiveInput, clean_user_input
@@ -73,26 +75,69 @@ def build_agent(observer=None):
     return AgentLoop(backend, reg, build_system_prompt(), observer=observer)
 
 
-def make_observer(enabled):
-    def observe(event, payload):
-        if not enabled():
+class TracePrinter:
+    """Visible execution trace for the CLI, not hidden model reasoning."""
+
+    def __init__(self, enabled):
+        self.enabled = enabled
+        self._model_started: dict[int, float] = {}
+        self._tool_started: dict[str, float] = {}
+        self._command_tool_started: tuple[str, float] | None = None
+
+    def observe(self, event, payload):
+        if not self.enabled():
             return
         if event == "model_start":
-            print(render_trace("model", f"turn {payload.get('turn')}"))
+            turn = int(payload.get("turn") or 0)
+            self._model_started[turn] = perf_counter()
+            print(render_trace("model turn", str(turn)))
         elif event == "model_end":
+            turn = int(payload.get("turn") or 0)
+            elapsed = _elapsed(self._model_started.pop(turn, None))
             calls = payload.get("tool_calls") or []
             if calls:
-                print(render_trace("model selected tools", ", ".join(calls)))
+                print(render_trace("selected tools", ", ".join(calls), elapsed=elapsed))
             elif payload.get("content_preview"):
-                print(render_trace("model answered", payload["content_preview"]))
+                print(render_trace("model answer", payload["content_preview"], elapsed=elapsed))
         elif event == "tool_start":
-            print(render_trace("tool", f"{payload.get('name')} {payload.get('arguments')}"))
+            name = str(payload.get("name") or "unknown")
+            self._tool_started[name] = perf_counter()
+            print(render_trace(f"tool {name}", _json_preview(payload.get("arguments", {}))))
         elif event == "tool_end":
-            print(render_trace("tool result", f"{payload.get('name')} -> {payload.get('preview')}"))
+            name = str(payload.get("name") or "unknown")
+            elapsed = _elapsed(self._tool_started.pop(name, None))
+            print(render_trace(f"tool result {name}", str(payload.get("preview") or ""), elapsed=elapsed))
         elif event == "tool_error":
-            print(render_trace("tool error", f"{payload.get('name')} -> {payload.get('error')}"))
+            name = str(payload.get("name") or "unknown")
+            elapsed = _elapsed(self._tool_started.pop(name, None))
+            print(render_trace(f"tool error {name}", str(payload.get("error") or ""), elapsed=elapsed))
         elif event == "context_compacted":
             print(render_trace("context compacted", f"{payload.get('messages')} messages retained"))
+
+    def command(self, event: str, detail: str) -> None:
+        if not self.enabled():
+            return
+        name, rest = _split_trace_detail(detail)
+        if event == "tool":
+            self._command_tool_started = (name, perf_counter())
+            print(render_trace(f"tool {name}", rest))
+            return
+        if event == "tool result":
+            elapsed = None
+            if self._command_tool_started and self._command_tool_started[0] == name:
+                elapsed = _elapsed(self._command_tool_started[1])
+                self._command_tool_started = None
+            print(render_trace(f"tool result {name}", rest, elapsed=elapsed))
+            return
+        print(render_trace(event, detail))
+
+
+def make_observer(enabled):
+    printer = TracePrinter(enabled)
+
+    def observe(event, payload):
+        printer.observe(event, payload)
+
     return observe
 
 
@@ -102,12 +147,13 @@ def interactive() -> int:
 
     print(render_welcome())
     print()
-    think_enabled = False
-    agent = build_agent(observer=make_observer(lambda: think_enabled))
+    think_enabled = True
+    trace = TracePrinter(lambda: think_enabled)
+    agent = build_agent(observer=trace.observe)
     session = AgentSession(agent)
     router = CommandRouter(
         agent.registry,
-        trace=lambda event, detail: print(render_trace(event, detail)) if think_enabled else None,
+        trace=trace.command,
     )
     input_reader = InteractiveInput(render_prompt())
     while True:
@@ -165,7 +211,8 @@ def main(argv: list[str] | None = None) -> int:
         from agent.commands import CommandRouter
 
         reg = build_default_registry()
-        result = CommandRouter(reg).handle(task)
+        trace = TracePrinter(lambda: True)
+        result = CommandRouter(reg, trace=trace.command).handle(task, think_enabled=True)
         if result.handled:
             if result.selfcheck:
                 return selfcheck()
@@ -176,9 +223,34 @@ def main(argv: list[str] | None = None) -> int:
             return 0
 
     # 真正跑任务：优先用 DeepSeek API；没配 key 时回退到 FakeBackend（离线打通管道）
-    agent = build_agent()
+    trace = TracePrinter(lambda: True)
+    agent = build_agent(observer=trace.observe)
     print(agent.run(task))
     return 0
+
+
+def _json_preview(value) -> str:
+    try:
+        return json.dumps(value, ensure_ascii=False, default=str, separators=(",", ":"))
+    except TypeError:
+        return str(value)
+
+
+def _elapsed(started_at: float | None) -> float | None:
+    if started_at is None:
+        return None
+    return max(perf_counter() - started_at, 0.0)
+
+
+def _split_trace_detail(detail: str) -> tuple[str, str]:
+    text = str(detail).strip()
+    if " -> " in text:
+        name, rest = text.split(" -> ", 1)
+        return name.strip() or "unknown", rest.strip()
+    if not text:
+        return "unknown", ""
+    name, _, rest = text.partition(" ")
+    return name.strip() or "unknown", rest.strip()
 
 
 if __name__ == "__main__":

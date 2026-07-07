@@ -100,6 +100,9 @@
 - [x] 自测迭代：改用 timezone-aware UTC 时间，消除 Python 3.13 `datetime.utcnow()` 弃用 warning。
 - [x] 增加通用标的解析：`finance_resolve_symbol` / `/resolve` 可用公司名、简称、中文名、英文名动态解析 A 股、港股、美股候选，不再依赖逐个硬编码。
 - [x] 修复 MiniMax 查询：`minimax`、`稀宇科技` 等名称优先通过东方财富/Yahoo/web 搜索解析到港股候选，再查行情。
+- [x] 参考 Claude Code 的终端执行可见性，默认开启高层 `thinking` 轨迹。
+- [x] `thinking` 轨迹增加本地时间、模型回合、工具选择、工具参数摘要、结果预览和耗时。
+- [x] 单次自然语言任务和单次 slash command 默认展示 trace；交互模式仍可用 `/think off` 关闭。
 
 ## 已实现功能
 
@@ -125,7 +128,7 @@
 - CLI 帮助菜单：`python -m agent.cli /help` 显示功能列表和示例命令。
 - CLI 交互模式：`python -m agent.cli` 后可在同一进程中持续提问，复用会话上下文。
 - CLI 命令模式：常用金融工具有对应 slash command，可绕过自然语言路由直接执行。
-- CLI 高层 trace：`/think on` 展示模型回合、工具调用和结果摘要，不输出隐藏推理链。
+- CLI 高层 trace：默认展示模型回合、工具调用、结果摘要、时间戳和耗时，不输出隐藏推理链；可用 `/think off` 关闭。
 - CLI 行编辑：支持历史记录、方向键、删除键、常见 Emacs 快捷键和命令补全。
 - CLI 输入清洗：误粘贴 `finance-agent >` 前缀时会自动剥离。
 - 标的核验：自然语言包含“标的/代码/上市”等问题时，先做公开网页搜索，再做行情核验。

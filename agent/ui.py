@@ -50,7 +50,7 @@ PANEL_ROWS = [
     ("", ""),
     ("Commands", ""),
     ("/help", "menu and examples"),
-    ("/think on", "show high-level tool trace"),
+    ("/think off", "hide timed execution trace"),
     ("/resolve minimax", "find ticker candidates"),
     ("/quote AAPL", "fast market snapshot"),
 ]
@@ -63,7 +63,8 @@ finance-agent 功能菜单
   /help
     显示当前功能菜单。
   /think on | /think off
-    开关高层执行轨迹。显示模型是否调用工具、工具名、参数和结果摘要。
+    开关高层执行轨迹。默认开启，显示时间、耗时、模型回合、工具名、参数和结果摘要。
+    这里只展示可审计的执行摘要，不展示隐藏推理链。
   /selfcheck 或 --selfcheck
     运行工具注册、后端和主循环自检。
   /clear
@@ -159,7 +160,7 @@ Trace2Skill 自进化：
 
 def render_welcome() -> str:
     lines: list[str] = []
-    title = " Finance Agent v0.3.0 · stock research workspace "
+    title = " Finance Agent v0.3.1 · stock research workspace "
     lines.append(_color(_top_border(title), "gold"))
     logo = _logo_rows()
     body_rows = max(len(logo), len(PANEL_ROWS))
@@ -189,10 +190,20 @@ def render_prompt() -> str:
     return _color("finance-agent", "green") + _color(" > ", "muted")
 
 
-def render_trace(event: str, detail: str = "") -> str:
-    prefix = _color("thinking", "muted")
+def render_trace(
+    event: str,
+    detail: str = "",
+    *,
+    elapsed: float | None = None,
+    timestamp: str | None = None,
+) -> str:
+    clock = timestamp or datetime.now().strftime("%H:%M:%S")
+    elapsed_part = ""
+    if elapsed is not None:
+        elapsed_part = " " + _color("+" + _format_elapsed(elapsed), "gold")
+    prefix = f"{_color('thinking', 'muted')} {_muted(clock)}{elapsed_part}"
     if detail:
-        return f"{prefix} · {event}: {detail}"
+        return f"{prefix} · {event}: {_trace_detail(detail)}"
     return f"{prefix} · {event}"
 
 
@@ -312,6 +323,21 @@ def _truncate_display(text: str, width: int) -> str:
 
 def _session_id() -> str:
     return datetime.now().strftime("%Y%m%d_%H%M%S")
+
+
+def _format_elapsed(seconds: float) -> str:
+    if seconds < 10:
+        return f"{seconds:.2f}s"
+    if seconds < 60:
+        return f"{seconds:.1f}s"
+    minutes = int(seconds // 60)
+    remaining = seconds - minutes * 60
+    return f"{minutes}m{remaining:.0f}s"
+
+
+def _trace_detail(detail: str, width: int = 220) -> str:
+    compact = " ".join(str(detail).split())
+    return _truncate_display(compact, width)
 
 
 def _logo_rows() -> list[str]:

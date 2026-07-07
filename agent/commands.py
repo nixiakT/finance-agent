@@ -1,6 +1,7 @@
 """Interactive slash commands."""
 from __future__ import annotations
 
+import json
 import shlex
 from dataclasses import dataclass
 from typing import Callable
@@ -202,14 +203,14 @@ class CommandRouter:
             return CommandResult(True, f"thinking 当前状态：{state}")
         value = args[0].lower()
         if value in {"on", "true", "1"}:
-            return CommandResult(True, "thinking 已开启：会显示高层执行轨迹和工具调用。", think=True)
+            return CommandResult(True, "thinking 已开启：会显示时间、耗时、模型回合、工具调用和结果摘要。", think=True)
         if value in {"off", "false", "0"}:
             return CommandResult(True, "thinking 已关闭。", think=False)
         return CommandResult(True, "用法：/think on 或 /think off")
 
     def _trace_tool(self, name: str, arguments: dict) -> None:
         if self.trace:
-            self.trace("tool", f"{name} {arguments}")
+            self.trace("tool", f"{name} {_json_preview(arguments)}")
 
     def _with_result_trace(self, name: str, output: str) -> str:
         if self.trace:
@@ -239,3 +240,10 @@ def _preview(text: str, limit: int = 180) -> str:
     if len(clean) <= limit:
         return clean
     return clean[:limit] + "..."
+
+
+def _json_preview(value: object) -> str:
+    try:
+        return json.dumps(value, ensure_ascii=False, default=str, separators=(",", ":"))
+    except TypeError:
+        return str(value)
