@@ -311,10 +311,15 @@ def test_portfolio_command_builds_and_marks_paper_account(tmp_path: Any, monkeyp
     router = CommandRouter(ToolRegistry(), finance_agent=PortfolioFinance())  # type: ignore[arg-type]
     built = router.handle("/portfolio init 1000000 AAPL MSFT NVDA").output
     marked = router.handle("/portfolio mark").output
+    sold = router.handle("/portfolio sell AAPL 止盈").output
+    trades = router.handle("/portfolio trades").output
 
     assert "# 模拟投资账户" in built
     assert "候选评分" in built
     assert "累计收益" in marked
+    assert "SELL" in sold
+    assert "止盈" in sold
+    assert "纸面交易流水" in trades
 
 
 def test_learn_history_command_updates_skill_and_prediction(tmp_path: Any, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -586,6 +591,23 @@ class PortfolioFinance(StatusFinance):
         from finance.paper_portfolio import load_account, render_account
 
         return render_account(load_account(name))
+
+    def sell_paper_holding(
+        self,
+        symbol: str,
+        shares: float | str = "all",
+        name: str = "default",
+        reason: str = "manual sell",
+    ) -> str:
+        from finance.paper_portfolio import render_account, render_transactions, sell_holding
+
+        account = sell_holding(symbol, shares=shares, price=101, reason=reason, name=name)
+        return render_account(account) + "\n\n" + render_transactions(account)
+
+    def paper_trades(self, name: str = "default", limit: int = 30) -> str:
+        from finance.paper_portfolio import load_account, render_transactions
+
+        return render_transactions(load_account(name), limit)
 
     def rebalance_paper_portfolio(
         self,

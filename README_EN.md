@@ -75,8 +75,8 @@ python -m agent.cli "Give the agent 1,000,000 paper cash to invest in AAPL, MSFT
 /predict record/list/eval/learn
                               Record predictions, list the ledger, evaluate outcomes, and learn from history
 /learn-history AAPL 2y 20     Learn forecast rules from history, record the forecast, and update Skill
-/portfolio init/status/mark/rebalance
-                              Create a 1,000,000 paper portfolio, inspect holdings, mark daily NAV, and rebalance
+/portfolio init/status/mark/sell/trades/rebalance
+                              Create a paper portfolio, inspect holdings, mark daily NAV, simulate sells, view trades, and rebalance
 /schedule list/brief/portfolio/run
                               Create scheduled WeChat briefs or portfolio marks, or execute due jobs
 /mcp                         Show registered MCP tools
@@ -165,6 +165,8 @@ Useful commands:
 /learn-history AAPL 2y 20
 /portfolio init 1000000 AAPL MSFT NVDA AMD GOOGL
 /portfolio mark
+/portfolio sell AMD all high volatility, reduce paper risk
+/portfolio trades
 /schedule portfolio default 1440
 /schedule brief AAPL,MSFT,NVDA 1440
 /schedule run
@@ -176,7 +178,7 @@ The prediction scoring loop writes calls to `.finance_agent/predictions.jsonl`, 
 
 Historical learning turns historical candles into walk-forward samples and checks how the current feature buckets performed in the past. `/learn-history AAPL 2y 20` outputs direction, confidence, sample count, and matched features, appends the result to `.finance_agent/history_learning.jsonl`, updates `skills/finance-history-learning/SKILL.md`, and records a forecast for future scoring.
 
-The paper investment account writes to `.finance_agent/portfolio_default.json`. `/portfolio init 1000000 AAPL MSFT NVDA` builds paper holdings from current quotes, fundamentals, indicators, and data-source confidence; `/portfolio mark` appends a NAV record using latest prices; `/portfolio rebalance ...` recalculates allocation from a new stock pool. It is paper-only and never connects to a broker or sends real orders.
+The paper investment account writes to `.finance_agent/portfolio_default.json`. `/portfolio init 1000000 AAPL MSFT NVDA` builds paper holdings from current quotes, fundamentals, indicators, and data-source confidence, and records BUY transactions; `/portfolio mark` appends a NAV record using latest prices; `/portfolio sell AMD all <reason>` simulates a SELL with realized PnL and reason; `/portfolio trades` shows the trade ledger; `/portfolio rebalance ...` recalculates allocation from a new stock pool and records the buy/sell differences. It is paper-only and never connects to a broker or sends real orders.
 
 Scheduled WeChat delivery uses `.finance_agent/scheduled_jobs.json`. `/schedule portfolio default 1440` can mark the paper portfolio daily and send it to the WeChat connector or dry-run outbox. Create jobs with `/schedule brief` or `/schedule portfolio`, then run due jobs manually or through cron/launchd:
 

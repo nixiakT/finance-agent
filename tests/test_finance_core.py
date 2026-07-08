@@ -9,7 +9,15 @@ from finance.backtest import StrategyConfig, backtest_moving_average_cross, form
 from finance.data import ProviderChain, ProviderError, SampleDataProvider, _news_matches
 from finance.models import Candle, Financials, NewsItem, Quote, StockSnapshot, utc_now_iso
 from finance.history_learning import learn_from_history, render_learning, update_history_learning_skill
-from finance.paper_portfolio import construct_portfolio, mark_to_market, render_account
+from finance.paper_portfolio import (
+    construct_portfolio,
+    load_account,
+    mark_to_market,
+    rebalance_portfolio,
+    render_account,
+    render_transactions,
+    sell_holding,
+)
 from finance.predictions import evaluate_prediction, record_prediction, render_learning_report
 from finance.quality import render_quality_screen
 from finance.report import render_stock_report
@@ -174,16 +182,51 @@ def test_paper_portfolio_constructs_and_marks_account(tmp_path) -> None:  # noqa
     )
 
     account, scores = construct_portfolio([snapshot], initial_cash=1_000_000, base_dir=tmp_path)
+    assert account.transactions
+    assert account.transactions[0]["action"] == "BUY"
     marked = mark_to_market(
         get_quote=lambda symbol: Quote(symbol=symbol, price=110, source="STATIC", as_of=utc_now_iso()),
         base_dir=tmp_path,
     )
+    sold = sell_holding("AAPL", shares="all", price=120, base_dir=tmp_path, reason="unit sell")
     output = render_account(marked)
+    trades = render_transactions(sold)
 
     assert scores[0].score > 35
     assert account.holdings
     assert marked.history[-1]["event"] == "mark"
     assert "累计收益" in output
+    assert "SELL" in trades
+    assert sold.transactions[-1]["realized_pnl"] > 0
+
+
+def test_paper_portfolio_rebalance_preserves_cost_basis(tmp_path) -> None:  # noqa: ANN001
+    def snapshot(symbol: str, price: float) -> StockSnapshot:
+        return StockSnapshot(
+            symbol=symbol,
+            quote=Quote(symbol=symbol, price=price, source="STATIC", as_of=utc_now_iso(), is_realtime=True),
+            history=[],
+            financials=Financials(
+                symbol=symbol,
+                source="STATIC",
+                as_of=utc_now_iso(),
+                pe_ratio=20,
+                free_cash_flow=1_000_000,
+                return_on_equity=0.18,
+                profit_margin=0.22,
+            ),
+            news=[],
+            indicators={"return_3m_pct": 12, "return_1y_pct": 24, "annualized_volatility_pct": 20},
+            fetched_at=utc_now_iso(),
+        )
+
+    construct_portfolio([snapshot("AAPL", 100)], initial_cash=1_000_000, base_dir=tmp_path)
+    rebalance_portfolio([snapshot("AAPL", 120), snapshot("MSFT", 100)], base_dir=tmp_path)
+    account = load_account(base_dir=tmp_path)
+    aapl = next(holding for holding in account.holdings if holding.symbol == "AAPL")
+
+    assert aapl.avg_cost == 100
+    assert {item["action"] for item in account.transactions} >= {"BUY", "SELL"}
 
 
 def test_history_learning_generates_forecast_and_skill(tmp_path) -> None:  # noqa: ANN001

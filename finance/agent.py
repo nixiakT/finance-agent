@@ -16,6 +16,8 @@ from .paper_portfolio import (
     rebalance_portfolio,
     render_account,
     render_recommendation,
+    render_transactions,
+    sell_holding,
 )
 from .predictions import record_prediction
 from .quality import render_quality_screen
@@ -236,6 +238,25 @@ class FinanceResearchAgent:
 
     def show_paper_portfolio(self, name: str = "default") -> str:
         return render_account(load_account(name))
+
+    def sell_paper_holding(
+        self,
+        symbol: str,
+        shares: float | str = "all",
+        name: str = "default",
+        reason: str = "manual sell",
+    ) -> str:
+        normalized = _resolve_symbol(symbol)
+        try:
+            quote = self.provider.get_quote(normalized)
+            price = quote.price
+        except Exception:
+            price = None
+        account = sell_holding(normalized, shares=shares, price=price, reason=reason, name=name)
+        return render_account(account) + "\n\n" + render_transactions(account, 10)
+
+    def paper_trades(self, name: str = "default", limit: int = 30) -> str:
+        return render_transactions(load_account(name), limit)
 
     def learn_from_history(
         self,

@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import json
 import math
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Callable
@@ -32,6 +32,7 @@ class PortfolioAccount:
     initial_cash: float
     cash: float
     holdings: list[Holding] = field(default_factory=list)
+    transactions: list[dict[str, Any]] = field(default_factory=list)
     history: list[dict[str, Any]] = field(default_factory=list)
     created_at: str = ""
     updated_at: str = ""
@@ -86,6 +87,7 @@ def load_account(name: str = DEFAULT_ACCOUNT, base_dir: Path | None = None) -> P
         initial_cash=float(data.get("initial_cash") or 0),
         cash=float(data.get("cash") or 0),
         holdings=holdings,
+        transactions=list(data.get("transactions", [])),
         history=list(data.get("history", [])),
         created_at=str(data.get("created_at") or ""),
         updated_at=str(data.get("updated_at") or ""),
@@ -100,6 +102,7 @@ def save_account(account: PortfolioAccount, base_dir: Path | None = None) -> Pat
         "initial_cash": account.initial_cash,
         "cash": account.cash,
         "holdings": [holding.__dict__ for holding in account.holdings],
+        "transactions": account.transactions[-1000:],
         "history": account.history[-500:],
         "created_at": account.created_at,
         "updated_at": account.updated_at,
@@ -136,6 +139,7 @@ def construct_portfolio(
     weights = _target_weights(selected, max_weight)
     holdings: list[Holding] = []
     used_cash = 0.0
+    transactions: list[dict[str, Any]] = []
     for score, weight in zip(selected, weights, strict=False):
         assert score.price is not None
         market_value = investable * weight
@@ -153,9 +157,17 @@ def construct_portfolio(
             weight=0.0,
             thesis=score.thesis,
         ))
+        transactions.append(_transaction(
+            action="BUY",
+            symbol=score.symbol,
+            shares=float(shares),
+            price=float(score.price),
+            reason=f"initial build: {score.thesis}",
+        ))
 
     account.cash = account.initial_cash - used_cash
     account.holdings = _normalize_holding_weights(holdings, account.cash)
+    account.transactions = transactions
     account.updated_at = _iso_now()
     account.history.append(_history_row(account, event="construct", notes="initial paper portfolio"))
     save_account(account, base_dir)
@@ -173,7 +185,19 @@ def rebalance_portfolio(
     base_dir: Path | None = None,
 ) -> tuple[PortfolioAccount, list[CandidateScore]]:
     account = load_account(name, base_dir)
-    total = portfolio_value(account, {holding.symbol: holding.last_price for holding in account.holdings})
+    latest_prices = {
+        snapshot.symbol: snapshot.quote.price
+        for snapshot in snapshots
+        if snapshot.quote.price is not None and snapshot.quote.price > 0
+    }
+    for holding in account.holdings:
+        latest_price = latest_prices.get(holding.symbol)
+        if latest_price is not None:
+            holding.last_price = float(latest_price)
+            holding.market_value = holding.shares * float(latest_price)
+    account.holdings = _normalize_holding_weights(account.holdings, account.cash)
+    old_holdings = {holding.symbol: replace(holding) for holding in account.holdings}
+    total = portfolio_value(account)
     scores = score_candidates(snapshots)
     selected = [
         score for score in scores
@@ -194,12 +218,13 @@ def rebalance_portfolio(
         holdings.append(Holding(
             symbol=score.symbol,
             shares=float(shares),
-            avg_cost=float(score.price),
+            avg_cost=_rebalance_avg_cost(old_holdings.get(score.symbol), float(shares), float(score.price)),
             last_price=float(score.price),
             market_value=float(actual_value),
             weight=0.0,
             thesis=score.thesis,
         ))
+    _record_rebalance_transactions(account, old_holdings, holdings)
     account.cash = total - used_cash
     account.holdings = _normalize_holding_weights(holdings, account.cash)
     account.updated_at = _iso_now()
@@ -230,6 +255,72 @@ def mark_to_market(
     return account
 
 
+def sell_holding(
+    symbol: str,
+    *,
+    shares: float | str = "all",
+    price: float | None = None,
+    reason: str = "manual sell",
+    name: str = DEFAULT_ACCOUNT,
+    base_dir: Path | None = None,
+) -> PortfolioAccount:
+    account = load_account(name, base_dir)
+    target = symbol.upper()
+    sell_all = str(shares).lower() == "all"
+    requested_shares: float | None = None
+    if not sell_all:
+        try:
+            requested_shares = float(shares)
+        except (TypeError, ValueError):
+            account.history.append(_history_row(account, event="sell_failed", notes=f"invalid shares: {shares}"))
+            save_account(account, base_dir)
+            return account
+        if requested_shares <= 0:
+            account.history.append(_history_row(account, event="sell_failed", notes=f"invalid shares: {shares}"))
+            save_account(account, base_dir)
+            return account
+    remaining: list[Holding] = []
+    sold = False
+    for holding in account.holdings:
+        if holding.symbol.upper() != target:
+            remaining.append(holding)
+            continue
+        sell_shares = holding.shares if sell_all else min(requested_shares or 0.0, holding.shares)
+        if sell_shares <= 0:
+            remaining.append(holding)
+            continue
+        sell_price = float(price if price is not None and price > 0 else holding.last_price)
+        if sell_price <= 0:
+            remaining.append(holding)
+            continue
+        proceeds = sell_shares * sell_price
+        realized = (sell_price - holding.avg_cost) * sell_shares
+        account.cash += proceeds
+        account.transactions.append(_transaction(
+            action="SELL",
+            symbol=holding.symbol,
+            shares=float(sell_shares),
+            price=sell_price,
+            reason=reason,
+            realized_pnl=realized,
+        ))
+        sold = True
+        left = holding.shares - sell_shares
+        if left > 0:
+            holding.shares = left
+            holding.last_price = sell_price
+            holding.market_value = left * sell_price
+            remaining.append(holding)
+    if not sold:
+        account.history.append(_history_row(account, event="sell_failed", notes=f"{target} not held"))
+    else:
+        account.holdings = _normalize_holding_weights(remaining, account.cash)
+        account.updated_at = _iso_now()
+        account.history.append(_history_row(account, event="sell", notes=reason))
+    save_account(account, base_dir)
+    return account
+
+
 def portfolio_value(account: PortfolioAccount, prices: dict[str, float] | None = None) -> float:
     prices = prices or {}
     holding_value = 0.0
@@ -237,6 +328,22 @@ def portfolio_value(account: PortfolioAccount, prices: dict[str, float] | None =
         price = prices.get(holding.symbol, holding.last_price)
         holding_value += holding.shares * price
     return account.cash + holding_value
+
+
+def render_transactions(account: PortfolioAccount, limit: int = 30) -> str:
+    if not account.transactions:
+        return "交易流水：暂无。"
+    lines = ["# 纸面交易流水", ""]
+    lines.append("| 时间 | 动作 | 标的 | 股数 | 价格 | 金额 | 实现盈亏 | 理由 |")
+    lines.append("|---|---|---|---:|---:|---:|---:|---|")
+    for item in account.transactions[-max(limit, 1):]:
+        lines.append(
+            f"| {item.get('as_of', '')} | {item.get('action', '')} | {item.get('symbol', '')} | "
+            f"{float(item.get('shares') or 0):,.0f} | {_money(item.get('price'))} | "
+            f"{_money(item.get('amount'))} | {_money(item.get('realized_pnl'))} | "
+            f"{str(item.get('reason') or '')[:90]} |"
+        )
+    return "\n".join(lines)
 
 
 def render_account(account: PortfolioAccount) -> str:
@@ -266,6 +373,10 @@ def render_account(account: PortfolioAccount) -> str:
                 f"{holding.thesis[:80]} |"
             )
     lines.extend([
+        "",
+        "## 交易统计",
+        f"- 交易笔数: {len(account.transactions)}",
+        f"- 已实现盈亏: {_money(_realized_pnl(account))}",
         "",
         "## 最近记录",
     ])
@@ -414,6 +525,74 @@ def _normalize_holding_weights(holdings: list[Holding], cash: float) -> list[Hol
     for holding in holdings:
         holding.weight = holding.market_value / total
     return holdings
+
+
+def _record_rebalance_transactions(
+    account: PortfolioAccount,
+    old_holdings: dict[str, Holding],
+    new_holdings: list[Holding],
+) -> None:
+    new_by_symbol = {holding.symbol: holding for holding in new_holdings}
+    for symbol, old in old_holdings.items():
+        new = new_by_symbol.get(symbol)
+        new_shares = new.shares if new else 0.0
+        if old.shares > new_shares:
+            sold = old.shares - new_shares
+            price = new.last_price if new else old.last_price
+            account.transactions.append(_transaction(
+                action="SELL",
+                symbol=symbol,
+                shares=sold,
+                price=price,
+                reason="rebalance reduce/exit",
+                realized_pnl=(price - old.avg_cost) * sold,
+            ))
+    for new in new_holdings:
+        old = old_holdings.get(new.symbol)
+        old_shares = old.shares if old else 0.0
+        if new.shares > old_shares:
+            bought = new.shares - old_shares
+            account.transactions.append(_transaction(
+                action="BUY",
+                symbol=new.symbol,
+                shares=bought,
+                price=new.last_price,
+                reason=f"rebalance add: {new.thesis}",
+            ))
+
+
+def _rebalance_avg_cost(old: Holding | None, new_shares: float, trade_price: float) -> float:
+    if old is None or old.shares <= 0 or new_shares <= 0:
+        return trade_price
+    if new_shares <= old.shares:
+        return old.avg_cost
+    bought = new_shares - old.shares
+    return ((old.avg_cost * old.shares) + (trade_price * bought)) / new_shares
+
+
+def _transaction(
+    *,
+    action: str,
+    symbol: str,
+    shares: float,
+    price: float,
+    reason: str,
+    realized_pnl: float = 0.0,
+) -> dict[str, Any]:
+    return {
+        "as_of": _iso_now(),
+        "action": action,
+        "symbol": symbol,
+        "shares": shares,
+        "price": price,
+        "amount": shares * price,
+        "realized_pnl": realized_pnl,
+        "reason": reason,
+    }
+
+
+def _realized_pnl(account: PortfolioAccount) -> float:
+    return sum(float(item.get("realized_pnl") or 0) for item in account.transactions)
 
 
 def _history_row(

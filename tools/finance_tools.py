@@ -94,6 +94,19 @@ def _show_paper_portfolio(name: str = "default") -> str:
     return _agent.show_paper_portfolio(name)
 
 
+def _sell_paper_holding(
+    symbol: str,
+    shares: float | str = "all",
+    name: str = "default",
+    reason: str = "manual sell",
+) -> str:
+    return _agent.sell_paper_holding(symbol, shares, name, reason)
+
+
+def _paper_trades(name: str = "default", limit: int = 30) -> str:
+    return _agent.paper_trades(name, limit)
+
+
 def _learn_from_history(
     symbol: str,
     period: str = "2y",
@@ -338,6 +351,35 @@ finance_show_paper_portfolio_tool = Tool(
     run=_show_paper_portfolio,
 )
 
+finance_sell_paper_holding_tool = Tool(
+    name="finance_sell_paper_holding",
+    description="在纸面组合中模拟卖出某只股票，记录 SELL 流水、卖出价格、数量、实现盈亏和理由；不会真实下单。",
+    parameters={
+        "type": "object",
+        "properties": {
+            "symbol": {"type": "string"},
+            "shares": {
+                "oneOf": [{"type": "number"}, {"type": "string"}],
+                "description": "卖出股数，或 all",
+            },
+            "name": {"type": "string"},
+            "reason": {"type": "string"},
+        },
+        "required": ["symbol"],
+    },
+    run=_sell_paper_holding,
+)
+
+finance_paper_trades_tool = Tool(
+    name="finance_paper_trades",
+    description="查看纸面组合交易流水，包含 BUY/SELL、数量、价格、金额和实现盈亏。",
+    parameters={
+        "type": "object",
+        "properties": {"name": {"type": "string"}, "limit": {"type": "integer"}},
+    },
+    run=_paper_trades,
+)
+
 finance_learn_from_history_tool = Tool(
     name="finance_learn_from_history",
     description="从股票历史价格中做 walk-forward 可解释学习，生成方向、置信度、保存预测账本，并更新 finance-history-learning Skill。",
@@ -374,5 +416,7 @@ finance_tools = [
     finance_rebalance_paper_portfolio_tool,
     finance_mark_paper_portfolio_tool,
     finance_show_paper_portfolio_tool,
+    finance_sell_paper_holding_tool,
+    finance_paper_trades_tool,
     finance_learn_from_history_tool,
 ]

@@ -489,6 +489,10 @@ class CommandRouter:
             self._trace_tool("finance_show_paper_portfolio", {"name": name})
             return self._with_result_trace("finance_show_paper_portfolio", self.finance.show_paper_portfolio(name))
         action = args[0].lower()
+        if action == "trades":
+            limit = int(args[1]) if len(args) > 1 and args[1].isdigit() else 30
+            self._trace_tool("finance_paper_trades", {"name": "default", "limit": limit})
+            return self._with_result_trace("finance_paper_trades", self.finance.paper_trades("default", limit))
         if action in {"init", "build"}:
             cash = 1_000_000.0
             symbols_start = 1
@@ -516,9 +520,27 @@ class CommandRouter:
                 "finance_rebalance_paper_portfolio",
                 self.finance.rebalance_paper_portfolio(symbols, "1y"),
             )
+        if action == "sell":
+            if len(args) < 2:
+                return "用法：/portfolio sell AAPL [shares|all] [reason]"
+            symbol = args[1]
+            shares: float | str = "all"
+            reason_start = 2
+            if len(args) > 2 and (args[2].lower() == "all" or _is_number(args[2])):
+                shares = args[2]
+                reason_start = 3
+            if isinstance(shares, str) and _is_number(shares):
+                shares = float(shares)
+            reason = " ".join(args[reason_start:]).strip() or "manual sell"
+            self._trace_tool("finance_sell_paper_holding", {"symbol": symbol, "shares": shares, "reason": reason})
+            return self._with_result_trace(
+                "finance_sell_paper_holding",
+                self.finance.sell_paper_holding(symbol, shares, "default", reason),
+            )
         return (
             "用法：/portfolio init [cash] [symbols...] | /portfolio status [name] | "
-            "/portfolio mark [name] | /portfolio rebalance [symbols...]"
+            "/portfolio mark [name] | /portfolio sell AAPL [shares|all] [reason] | "
+            "/portfolio trades [limit] | /portfolio rebalance [symbols...]"
         )
 
     def _learn_history(self, args: list[str]) -> str:
