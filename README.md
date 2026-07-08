@@ -62,7 +62,8 @@ python -m agent.cli "生成我的自选股每日简报：AAPL, MSFT, NVDA"
 ## 常用命令
 
 ```text
-/think on | /think off       开关高层执行轨迹，默认开启，展示时间、耗时和工具摘要
+/think on | compact | off    切换高层执行轨迹：展开、折叠摘要或隐藏
+/trace                       展开上一轮任务的详细 thinking 轨迹
 /lang zh | /lang en          切换 CLI 交互语言
 /status                      查看模型、数据源、工具数、thinking 状态和 License
 /proxy status/test/set/off   查看、测试、临时设置或关闭网页/行情查询代理
@@ -82,6 +83,8 @@ python -m agent.cli "生成我的自选股每日简报：AAPL, MSFT, NVDA"
 /news AAPL 5                 新闻
 /indicators AAPL 1y          技术指标
 /report AAPL 1y              研究报告
+/export-report AAPL 3mo reports/aapl.md
+                              生成研究报告并保存为 Markdown 文件
 /compare NVDA AMD 1y         股票对比
 /debate NVDA AMD 1y          多智能体辩论
 /backtest TSLA 20 60 2y      均线策略回测
@@ -95,7 +98,7 @@ python -m agent.cli "生成我的自选股每日简报：AAPL, MSFT, NVDA"
 
 交互输入使用 `prompt_toolkit`：支持历史记录、光标移动、删除、Ctrl+A/E/U/K 和 slash command 补全。CLI 会自动清理误粘贴的 `finance-agent >` 前缀。
 
-CLI 默认展示 Claude Code 风格的高层 `thinking` 轨迹，包括模型回合、工具选择、工具参数摘要、结果预览、时间戳和耗时。它是可审计执行摘要，不是隐藏推理链；需要安静输出时可输入 `/think off`。
+CLI 默认以 `compact` 模式展示 Claude Code 风格的高层 `thinking` 摘要。它只显示工具数量、耗时和工具名，最终答案会单独显示；需要展开详情时输入 `/think on` 或在交互模式里用 `/trace` 查看上一轮完整轨迹；需要安静输出时可输入 `/think off`。这些内容是可审计执行摘要，不是隐藏推理链。
 
 ## 代理与语言
 

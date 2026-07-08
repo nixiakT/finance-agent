@@ -14,7 +14,7 @@ from time import perf_counter
 from tools.base import build_default_registry
 from agent.input import InteractiveInput, clean_user_input
 from agent.prompts import SYSTEM_PROMPT
-from agent.ui import render_help, render_prompt, render_trace, render_welcome
+from agent.ui import render_help, render_prompt, render_trace, render_trace_summary, render_welcome
 
 
 FINANCE_TEXT_HINTS = (
@@ -92,58 +92,96 @@ def build_agent(observer=None):
 class TracePrinter:
     """Visible execution trace for the CLI, not hidden model reasoning."""
 
-    def __init__(self, enabled):
-        self.enabled = enabled
+    def __init__(self, mode):
+        self.mode = mode
         self._model_started: dict[int, float] = {}
         self._tool_started: dict[str, float] = {}
         self._command_tool_started: tuple[str, float] | None = None
+        self._current_lines: list[str] = []
+        self._current_tools: list[str] = []
+        self._current_started: float | None = None
+        self._last_lines: list[str] = []
 
     def observe(self, event, payload):
-        if not self.enabled():
+        if self._mode() == "off":
             return
         if event == "model_start":
             turn = int(payload.get("turn") or 0)
             self._model_started[turn] = perf_counter()
-            print(render_trace("model turn", str(turn)))
+            self._emit(render_trace("model turn", str(turn)))
         elif event == "model_end":
             turn = int(payload.get("turn") or 0)
             elapsed = _elapsed(self._model_started.pop(turn, None))
             calls = payload.get("tool_calls") or []
             if calls:
-                print(render_trace("selected tools", ", ".join(calls), elapsed=elapsed))
+                self._emit(render_trace("selected tools", ", ".join(calls), elapsed=elapsed))
             elif payload.get("content_preview"):
-                print(render_trace("model answer", payload["content_preview"], elapsed=elapsed))
+                self._emit(render_trace("model answer", payload["content_preview"], elapsed=elapsed))
         elif event == "tool_start":
             name = str(payload.get("name") or "unknown")
             self._tool_started[name] = perf_counter()
-            print(render_trace(f"tool {name}", _json_preview(payload.get("arguments", {}))))
+            self._emit(render_trace(f"tool {name}", _json_preview(payload.get("arguments", {}))), tool=name)
         elif event == "tool_end":
             name = str(payload.get("name") or "unknown")
             elapsed = _elapsed(self._tool_started.pop(name, None))
-            print(render_trace(f"tool result {name}", str(payload.get("preview") or ""), elapsed=elapsed))
+            self._emit(render_trace(f"tool result {name}", str(payload.get("preview") or ""), elapsed=elapsed), tool=name)
         elif event == "tool_error":
             name = str(payload.get("name") or "unknown")
             elapsed = _elapsed(self._tool_started.pop(name, None))
-            print(render_trace(f"tool error {name}", str(payload.get("error") or ""), elapsed=elapsed))
+            self._emit(render_trace(f"tool error {name}", str(payload.get("error") or ""), elapsed=elapsed), tool=name)
         elif event == "context_compacted":
-            print(render_trace("context compacted", f"{payload.get('messages')} messages retained"))
+            self._emit(render_trace("context compacted", f"{payload.get('messages')} messages retained"))
 
     def command(self, event: str, detail: str) -> None:
-        if not self.enabled():
+        if self._mode() == "off":
             return
         name, rest = _split_trace_detail(detail)
         if event == "tool":
             self._command_tool_started = (name, perf_counter())
-            print(render_trace(f"tool {name}", rest))
+            self._emit(render_trace(f"tool {name}", rest), tool=name)
             return
         if event == "tool result":
             elapsed = None
             if self._command_tool_started and self._command_tool_started[0] == name:
                 elapsed = _elapsed(self._command_tool_started[1])
                 self._command_tool_started = None
-            print(render_trace(f"tool result {name}", rest, elapsed=elapsed))
+            self._emit(render_trace(f"tool result {name}", rest, elapsed=elapsed), tool=name)
             return
-        print(render_trace(event, detail))
+        self._emit(render_trace(event, detail))
+
+    def flush(self) -> None:
+        if not self._current_lines:
+            return
+        elapsed = _elapsed(self._current_started)
+        self._last_lines = list(self._current_lines)
+        if self._mode() == "compact":
+            print(render_trace_summary(len(self._current_lines), self._current_tools, elapsed=elapsed))
+        self._current_lines = []
+        self._current_tools = []
+        self._current_started = None
+
+    def render_details(self) -> str:
+        if not self._last_lines:
+            return "暂无可展开的 thinking 轨迹。"
+        return "\n".join(self._last_lines)
+
+    def _emit(self, line: str, tool: str | None = None) -> None:
+        if self._current_started is None:
+            self._current_started = perf_counter()
+        self._current_lines.append(line)
+        if tool and tool not in self._current_tools:
+            self._current_tools.append(tool)
+        if self._mode() == "on":
+            print(line)
+
+    def _mode(self) -> str:
+        value = self.mode()
+        if value is True:
+            return "on"
+        if value is False or value is None:
+            return "off"
+        normalized = str(value).lower()
+        return normalized if normalized in {"on", "compact", "off"} else "compact"
 
 
 def make_observer(enabled):
@@ -162,8 +200,8 @@ def interactive() -> int:
 
     print(render_welcome())
     print()
-    think_enabled = True
-    trace = TracePrinter(lambda: think_enabled)
+    think_mode = "compact"
+    trace = TracePrinter(lambda: think_mode)
     agent = build_agent(observer=trace.observe)
     session = AgentSession(agent)
     finance = FinanceResearchAgent()
@@ -186,15 +224,19 @@ def interactive() -> int:
         if command in {"/help", "help"}:
             print(render_help())
             continue
+        if command == "/trace":
+            print(trace.render_details())
+            continue
         if task.startswith("/"):
-            result = router.handle(task, think_enabled=think_enabled)
+            result = router.handle(task, think_enabled=think_mode)
             if result.handled:
                 if result.think is not None:
-                    think_enabled = result.think
+                    think_mode = result.think
                 if result.clear:
                     session.reset()
                 if result.selfcheck:
                     selfcheck()
+                trace.flush()
                 if result.output:
                     print(result.output)
                 if result.exit:
@@ -211,9 +253,12 @@ def interactive() -> int:
             trace.command("tool", f"finance_route_task {_json_preview({'task': task})}")
             output = finance.route_task(task)
             trace.command("tool result", f"finance_route_task -> {_preview(output)}")
+            trace.flush()
             print(output)
             continue
-        print(session.ask(task))
+        answer = session.ask(task)
+        trace.flush()
+        print(answer)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -234,11 +279,15 @@ def main(argv: list[str] | None = None) -> int:
         from agent.commands import CommandRouter
 
         reg = build_default_registry()
-        trace = TracePrinter(lambda: True)
-        result = CommandRouter(reg, trace=trace.command).handle(task, think_enabled=True)
+        trace = TracePrinter(lambda: "compact")
+        if task.lower() == "/trace":
+            print(trace.render_details())
+            return 0
+        result = CommandRouter(reg, trace=trace.command).handle(task, think_enabled="compact")
         if result.handled:
             if result.selfcheck:
                 return selfcheck()
+            trace.flush()
             if result.output:
                 print(result.output)
             if result.exit:
@@ -246,19 +295,22 @@ def main(argv: list[str] | None = None) -> int:
             return 0
 
     if _should_route_finance(task):
-        trace = TracePrinter(lambda: True)
+        trace = TracePrinter(lambda: "compact")
         from finance.agent import FinanceResearchAgent
 
         trace.command("tool", f"finance_route_task {_json_preview({'task': task})}")
         output = FinanceResearchAgent().route_task(task)
         trace.command("tool result", f"finance_route_task -> {_preview(output)}")
+        trace.flush()
         print(output)
         return 0
 
     # 真正跑任务：优先用 DeepSeek API；没配 key 时回退到 FakeBackend（离线打通管道）
-    trace = TracePrinter(lambda: True)
+    trace = TracePrinter(lambda: "compact")
     agent = build_agent(observer=trace.observe)
-    print(agent.run(task))
+    answer = agent.run(task)
+    trace.flush()
+    print(answer)
     return 0
 
 

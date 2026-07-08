@@ -5,6 +5,7 @@ import json
 import os
 import shlex
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Callable
 from urllib.parse import urlsplit
 
@@ -23,7 +24,7 @@ from finance.predictions import (
 from finance.web import web_fetch, web_search
 from agent.ui import current_lang
 from scheduler.jobs import add_job, list_jobs, render_jobs, run_due_jobs
-from tools.security import safety_summary
+from tools.security import guard_write, safety_summary
 from tools.base import ToolRegistry
 from wechat import connector_status, send_markdown, send_text
 
@@ -35,7 +36,7 @@ class CommandResult:
     exit: bool = False
     clear: bool = False
     selfcheck: bool = False
-    think: bool | None = None
+    think: str | None = None
 
 
 class CommandRouter:
@@ -118,6 +119,7 @@ class CommandRouter:
             "/debate": self._debate,
             "/backtest": self._backtest,
             "/brief": self._brief,
+            "/export-report": self._export_report,
         }
         if command in finance_commands:
             try:
@@ -172,6 +174,20 @@ class CommandRouter:
         self._trace_tool("finance_generate_report", {"symbol": symbol, "period": period})
         return self._with_result_trace("finance_generate_report", self.finance.generate_report(symbol, period))
 
+    def _export_report(self, args: list[str]) -> str:
+        symbol = _require_arg(args, "/export-report AAPL [period] [reports/aapl.md]")
+        period = args[1] if len(args) > 1 else "1y"
+        output_path = args[2] if len(args) > 2 else f"reports/{symbol.lower()}-{period}.md"
+        self._trace_tool("finance_generate_report", {"symbol": symbol, "period": period})
+        report = self.finance.generate_report(symbol, period)
+        resolved = guard_write(output_path, report)
+        resolved.write_text(report, encoding="utf-8")
+        try:
+            display_path = str(resolved.relative_to(Path.cwd()))
+        except ValueError:
+            display_path = str(resolved)
+        return self._with_result_trace("finance_generate_report", f"研究报告已保存到: {display_path}")
+
     def _quality(self, args: list[str]) -> str:
         symbol = _require_arg(args, "/quality AAPL [period]")
         period = args[1] if len(args) > 1 else "1y"
@@ -223,9 +239,10 @@ class CommandRouter:
         names = self.registry.names()
         return "已注册工具：\n" + "\n".join(f"- {name}" for name in names)
 
-    def _status(self, think_enabled: bool) -> str:
+    def _status(self, think_enabled: str | bool) -> str:
         diagnostics = self.finance.provider.diagnostics()
         enabled_sources = [row["name"] for row in diagnostics if row.get("status") == "enabled"]
+        think_label = _think_label(think_enabled)
         if current_lang() == "en":
             return "\n".join([
                 "Finance Agent status:",
@@ -235,7 +252,7 @@ class CommandRouter:
                 f"- MCP tools: {', '.join(self._mcp_tool_names()) or 'not connected'}",
                 f"- Proxy: {proxy_label()}",
                 f"- WeChat: {_wechat_mode_label()}",
-                f"- thinking: {'on' if think_enabled else 'off'} (default on; shows time/elapsed/tool summaries)",
+                f"- thinking: {think_label} (compact by default; use /think on for details)",
                 f"- Data sources: {', '.join(enabled_sources) if enabled_sources else 'no real source enabled'}",
                 "- License: MIT",
                 "- Boundary: research only, no auto trading",
@@ -248,7 +265,7 @@ class CommandRouter:
             f"- MCP 工具: {', '.join(self._mcp_tool_names()) or '未接入'}",
             f"- Proxy: {proxy_label()}",
             f"- WeChat: {_wechat_mode_label()}",
-            f"- thinking: {'on' if think_enabled else 'off'}（默认 on，展示时间/耗时/工具摘要）",
+            f"- thinking: {think_label}（默认 compact；/think on 展开详情）",
             f"- 数据源: {', '.join(enabled_sources) if enabled_sources else '无可用真实数据源'}",
             "- License: MIT",
             "- 边界: research only, no auto trading",
@@ -481,19 +498,27 @@ class CommandRouter:
         self._trace_tool("web_fetch", {"url": url})
         return self._with_result_trace("web_fetch", web_fetch(url))
 
-    def _think(self, args: list[str], think_enabled: bool) -> CommandResult:
+    def _think(self, args: list[str], think_enabled: str | bool) -> CommandResult:
         if not args:
-            state = "on" if think_enabled else "off"
+            state = _think_label(think_enabled)
             return CommandResult(True, _msg(f"thinking state: {state}", f"thinking 当前状态：{state}"))
         value = args[0].lower()
         if value in {"on", "true", "1"}:
             return CommandResult(True, _msg(
-                "thinking enabled: timestamps, elapsed time, model turns, tool calls and result previews are shown.",
+                "thinking expanded: timestamps, elapsed time, model turns, tool calls and result previews are shown.",
                 "thinking 已开启：会显示时间、耗时、模型回合、工具调用和结果摘要。",
-            ), think=True)
+            ), think="on")
+        if value in {"compact", "summary", "folded"}:
+            return CommandResult(True, _msg(
+                "thinking compact: detailed trace is folded into a one-line summary. Use /trace after a task to expand the last trace.",
+                "thinking compact：详细轨迹会收起成一行摘要。任务后输入 /trace 可展开上一轮轨迹。",
+            ), think="compact")
         if value in {"off", "false", "0"}:
-            return CommandResult(True, _msg("thinking disabled.", "thinking 已关闭。"), think=False)
-        return CommandResult(True, _msg("Usage: /think on or /think off", "用法：/think on 或 /think off"))
+            return CommandResult(True, _msg("thinking disabled.", "thinking 已关闭。"), think="off")
+        return CommandResult(True, _msg(
+            "Usage: /think on | /think compact | /think off",
+            "用法：/think on | /think compact | /think off",
+        ))
 
     def _lang(self, args: list[str]) -> CommandResult:
         if not args:
@@ -559,6 +584,15 @@ def _safe_base_url(value: str) -> str:
     except ValueError:
         port = ""
     return f"{parsed.scheme}://{host}{port}{parsed.path.rstrip('/')}"
+
+
+def _think_label(value: str | bool) -> str:
+    if value is True:
+        return "on"
+    if value is False or value is None:
+        return "off"
+    normalized = str(value).lower()
+    return normalized if normalized in {"on", "compact", "off"} else "compact"
 
 
 def _msg(en: str, zh: str) -> str:

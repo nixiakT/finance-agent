@@ -55,7 +55,7 @@ PANEL_ROWS = [
     ("Commands", ""),
     ("/help", "menu and examples"),
     ("/status", "model, sources, tools"),
-    ("/think off", "hide timed execution trace"),
+    ("/think on", "expand execution trace"),
     ("/quality AAPL", "research quality gate"),
 ]
 
@@ -66,9 +66,11 @@ finance-agent 功能菜单
 基础命令：
   /help
     显示当前功能菜单。
-  /think on | /think off
-    开关高层执行轨迹。默认开启，显示时间、耗时、模型回合、工具名、参数和结果摘要。
+  /think on | /think compact | /think off
+    切换高层执行轨迹。默认 compact 折叠成一行摘要；on 展开详情；off 完全隐藏。
     这里只展示可审计的执行摘要，不展示隐藏推理链。
+  /trace
+    展开上一轮任务的详细 thinking 轨迹。
   /lang zh | /lang en
     切换 CLI 交互语言。也可以设置 FINANCE_AGENT_LANG=zh 或 en。
   /selfcheck 或 --selfcheck
@@ -119,6 +121,8 @@ finance-agent 功能菜单
     计算技术指标。
   /report AAPL 1y
     生成结构化股票研究报告。
+  /export-report AAPL 3mo reports/aapl.md
+    生成结构化股票研究报告并保存为 Markdown 文件。
   /quality AAPL 1y
     运行研究质量门禁和去劣初筛，输出信息丰富度、数据缺口、快速否决/重审信号和下一步核验。
   /compare NVDA AMD 1y
@@ -215,8 +219,10 @@ Basics:
     Show this menu.
   /lang zh | /lang en
     Switch CLI language for the current process.
-  /think on | /think off
-    Toggle visible high-level execution trace. It shows timestamps, elapsed time, model turns, tool names, arguments and result previews.
+  /think on | /think compact | /think off
+    Toggle visible high-level execution trace. compact folds details into one summary line; on expands details; off hides it.
+  /trace
+    Expand the detailed thinking trace from the last task.
   /status
     Show model, base URL, proxy, tool count, data sources, thinking state and License.
   /proxy status | /proxy test | /proxy set http://127.0.0.1:7897 | /proxy off
@@ -253,6 +259,8 @@ Research commands:
     Related news.
   /report AAPL 1y
     Structured stock research report.
+  /export-report AAPL 3mo reports/aapl.md
+    Generate a structured stock research report and save it as a Markdown file.
   /quality AAPL 1y
     Research quality gate: information grade, data gaps, red flags and next checks.
   /compare NVDA AMD 1y
@@ -329,6 +337,23 @@ def render_trace(
     if detail:
         return f"{prefix} · {event}: {_trace_detail(detail)}"
     return f"{prefix} · {event}"
+
+
+def render_trace_summary(
+    steps: int,
+    tools: list[str],
+    *,
+    elapsed: float | None = None,
+) -> str:
+    elapsed_part = f" · {_format_elapsed(elapsed)}" if elapsed is not None else ""
+    tool_count = len(tools)
+    tool_label = "tool" if tool_count == 1 else "tools"
+    tool_part = ", ".join(tools[:4])
+    if len(tools) > 4:
+        tool_part += f", +{len(tools) - 4}"
+    if tool_part:
+        tool_part = f" · {tool_part}"
+    return f"{_color('thinking summary', 'muted')} · {steps} steps · {tool_count} {tool_label}{elapsed_part}{tool_part}"
 
 
 def _top_border(title: str) -> str:
