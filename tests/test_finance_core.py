@@ -8,6 +8,7 @@ from finance.agent import FinanceResearchAgent
 from finance.backtest import StrategyConfig, backtest_moving_average_cross, format_backtest, parse_strategy
 from finance.data import ProviderChain, ProviderError, SampleDataProvider, _news_matches
 from finance.models import Candle, Financials, NewsItem, Quote, StockSnapshot, utc_now_iso
+from finance.history_learning import learn_from_history, render_learning, update_history_learning_skill
 from finance.paper_portfolio import construct_portfolio, mark_to_market, render_account
 from finance.predictions import evaluate_prediction, record_prediction, render_learning_report
 from finance.quality import render_quality_screen
@@ -183,6 +184,35 @@ def test_paper_portfolio_constructs_and_marks_account(tmp_path) -> None:  # noqa
     assert account.holdings
     assert marked.history[-1]["event"] == "mark"
     assert "累计收益" in output
+
+
+def test_history_learning_generates_forecast_and_skill(tmp_path) -> None:  # noqa: ANN001
+    rule = learn_from_history("AAPL", rising_candles(180), horizon_days=20)
+    skill_path = update_history_learning_skill(rule, path=tmp_path / "skills" / "finance-history-learning" / "SKILL.md")
+    output = render_learning(rule)
+
+    assert rule.predicted_direction in {"up", "down", "neutral"}
+    assert 0 <= rule.confidence <= 0.95
+    assert "历史学习预测" in output
+    assert skill_path.exists()
+    assert "finance-history-learning" in skill_path.read_text(encoding="utf-8")
+
+
+def test_route_task_learns_from_history(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:  # noqa: ANN001
+    import finance.history_learning as history_learning
+    import finance.agent as finance_agent
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(history_learning, "LEARNING_PATH", tmp_path / ".finance_agent" / "history_learning.jsonl")
+    monkeypatch.setattr(history_learning, "SKILL_PATH", tmp_path / "skills" / "finance-history-learning" / "SKILL.md")
+    monkeypatch.setattr(finance_agent, "save_learning", lambda rule: history_learning.save_learning(rule, tmp_path / ".finance_agent" / "history_learning.jsonl"))
+    monkeypatch.setattr(finance_agent, "update_history_learning_skill", lambda rule: history_learning.update_history_learning_skill(rule, tmp_path / "skills" / "finance-history-learning" / "SKILL.md"))
+    agent = FinanceResearchAgent(provider=ProviderChain(providers=[StaticProvider()]))
+
+    output = agent.route_task("从历史数据中学习 AAPL 未来20天怎么走 并沉淀为 skill")
+
+    assert "历史学习预测" in output
+    assert "Skill updated" in output
 
 
 def test_debate_includes_berkshire_style_roles() -> None:

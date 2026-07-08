@@ -16,6 +16,7 @@ Command-line stock research assistant for quotes, fundamentals, news verificatio
 - Investment frameworks: Buffett/Munger, Duan Yongping, Li Lu, and Dalio.
 - Multi-agent debate: Bull, Bear, Value, Buffett, Munger, Duan, Li Lu, Dalio, Anti-Bias, Macro, Risk, and Judge, with discipline label, mirror test, and testable prediction.
 - Prediction scoring loop: record bullish/bearish/neutral calls, evaluate future outcomes, and review accuracy, confidence calibration, and high-confidence misses.
+- Historical learning forecast: run walk-forward learning on historical candles, generate direction/confidence, and persist the result as a Skill.
 - Paper investment account: give the agent 1,000,000 paper cash, score a stock pool, calculate shares and allocation, and record daily NAV.
 - Strategy helper: moving-average crossover backtests.
 - Watchlist briefs: batch summaries for tracked symbols.
@@ -73,6 +74,7 @@ python -m agent.cli "Give the agent 1,000,000 paper cash to invest in AAPL, MSFT
 /evolve <review/trace>        Save reusable finance lessons into memory and skills
 /predict record/list/eval/learn
                               Record predictions, list the ledger, evaluate outcomes, and learn from history
+/learn-history AAPL 2y 20     Learn forecast rules from history, record the forecast, and update Skill
 /portfolio init/status/mark/rebalance
                               Create a 1,000,000 paper portfolio, inspect holdings, mark daily NAV, and rebalance
 /schedule list/brief/portfolio/run
@@ -160,6 +162,7 @@ Useful commands:
 /predict record AAPL up 30 0.65 services revenue and buybacks support the thesis
 /predict eval all
 /predict learn save
+/learn-history AAPL 2y 20
 /portfolio init 1000000 AAPL MSFT NVDA AMD GOOGL
 /portfolio mark
 /schedule portfolio default 1440
@@ -170,6 +173,8 @@ Useful commands:
 Finance self-evolution writes preferences, corrections, data-source lessons, and risk rules to `.finance_agent/finance_memory.jsonl`. The core `skills/finance-research-evolution/SKILL.md` remains stable; use the lower-level `finance_evolve_from_trace` with a separate `skill_name` only when a new dedicated skill is needed. Local memory is gitignored, and skill writes sanitize common keys, tokens, and cookies.
 
 The prediction scoring loop writes calls to `.finance_agent/predictions.jsonl`, including baseline price, horizon, confidence, and thesis. `/predict eval` fetches the later price and computes directional hit, realized return, and confidence-weighted score. `/predict eval all` is useful for demos. `/predict learn` reviews direction buckets, accuracy, confidence errors, and high-confidence misses. `/predict learn save` stores the review in finance memory.
+
+Historical learning turns historical candles into walk-forward samples and checks how the current feature buckets performed in the past. `/learn-history AAPL 2y 20` outputs direction, confidence, sample count, and matched features, appends the result to `.finance_agent/history_learning.jsonl`, updates `skills/finance-history-learning/SKILL.md`, and records a forecast for future scoring.
 
 The paper investment account writes to `.finance_agent/portfolio_default.json`. `/portfolio init 1000000 AAPL MSFT NVDA` builds paper holdings from current quotes, fundamentals, indicators, and data-source confidence; `/portfolio mark` appends a NAV record using latest prices; `/portfolio rebalance ...` recalculates allocation from a new stock pool. It is paper-only and never connects to a broker or sends real orders.
 

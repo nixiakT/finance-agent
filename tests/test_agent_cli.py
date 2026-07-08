@@ -317,6 +317,23 @@ def test_portfolio_command_builds_and_marks_paper_account(tmp_path: Any, monkeyp
     assert "累计收益" in marked
 
 
+def test_learn_history_command_updates_skill_and_prediction(tmp_path: Any, monkeypatch: pytest.MonkeyPatch) -> None:
+    import finance.history_learning as history_learning
+    import finance.predictions as predictions
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(history_learning, "LEARNING_PATH", tmp_path / ".finance_agent" / "history_learning.jsonl")
+    monkeypatch.setattr(history_learning, "SKILL_PATH", tmp_path / "skills" / "finance-history-learning" / "SKILL.md")
+    monkeypatch.setattr(predictions, "PREDICTION_PATH", tmp_path / ".finance_agent" / "predictions.jsonl")
+
+    router = CommandRouter(ToolRegistry(), finance_agent=PortfolioFinance())  # type: ignore[arg-type]
+    output = router.handle("/learn-history AAPL 2y 20").output
+
+    assert "历史学习预测" in output
+    assert "Skill updated" in output
+    assert "Prediction recorded" in output
+
+
 def test_resolve_command_uses_finance_resolver() -> None:
     class Finance:
         def resolve_symbol(self, query: str) -> str:
@@ -578,3 +595,34 @@ class PortfolioFinance(StatusFinance):
         name: str = "default",
     ) -> str:
         return self.build_paper_portfolio(symbols, 1_000_000, period, max_positions, name)
+
+    def learn_from_history(
+        self,
+        symbol: str,
+        period: str = "2y",
+        horizon_days: int = 20,
+        record: bool = True,
+        update_skill: bool = True,
+    ) -> str:
+        from finance.history_learning import learn_from_history, render_learning, save_learning, update_history_learning_skill
+        from finance.predictions import record_prediction
+
+        candles = []
+        for idx in range(180):
+            from finance.models import Candle
+
+            candles.append(Candle(str(idx), None, None, None, 100 + idx))
+        rule = learn_from_history(symbol, candles, horizon_days=horizon_days)
+        save_learning(rule)
+        skill_path = update_history_learning_skill(rule)
+        prediction = record_prediction(
+            symbol=symbol,
+            direction=rule.predicted_direction,
+            horizon_days=horizon_days,
+            confidence=rule.confidence,
+            thesis="unit history learning",
+            baseline_price=279,
+            baseline_as_of="2026-01-01",
+            source="unit",
+        )
+        return f"{render_learning(rule)}\n\nSkill updated: {skill_path}\nPrediction recorded: {prediction.id}"

@@ -22,13 +22,14 @@ FINANCE_TEXT_HINTS = (
     "自选股", "标的", "上市", "港股", "美股", "概念股", "基本面", "技术面",
     "市盈率", "成交量", "财务", "均线", "智谱", "贵州茅台", "投资", "买多少",
     "仓位", "组合", "建仓", "模拟投资", "纸面组合", "100万", "一百万",
+    "历史学习", "历史数据中学习", "从历史中学习", "学习预测", "沉淀为skill",
 )
 
 FINANCE_WORD_HINTS = (
     "quote", "stock", "ticker", "price", "listed", "ipo", "nasdaq", "nyse", "hkex",
     "spacex", "minimax", "spcx", "nvda", "amd", "aapl", "tsla", "msft",
     "pe", "eps", "roe", "rsi", "macd", "ma20", "ma60", "portfolio", "allocation",
-    "allocate",
+    "allocate", "history", "learning",
 )
 
 

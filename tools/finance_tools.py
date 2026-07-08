@@ -94,6 +94,16 @@ def _show_paper_portfolio(name: str = "default") -> str:
     return _agent.show_paper_portfolio(name)
 
 
+def _learn_from_history(
+    symbol: str,
+    period: str = "2y",
+    horizon_days: int = 20,
+    record: bool = True,
+    update_skill: bool = True,
+) -> str:
+    return _agent.learn_from_history(symbol, period, horizon_days, record, update_skill)
+
+
 finance_route_task_tool = Tool(
     name="finance_route_task",
     description="根据自然语言金融任务自动选择报告、对比、辩论、回测或自选股简报。",
@@ -328,6 +338,23 @@ finance_show_paper_portfolio_tool = Tool(
     run=_show_paper_portfolio,
 )
 
+finance_learn_from_history_tool = Tool(
+    name="finance_learn_from_history",
+    description="从股票历史价格中做 walk-forward 可解释学习，生成方向、置信度、保存预测账本，并更新 finance-history-learning Skill。",
+    parameters={
+        "type": "object",
+        "properties": {
+            "symbol": {"type": "string"},
+            "period": {"type": "string", "description": "学习历史区间，如 2y、5y"},
+            "horizon_days": {"type": "integer", "description": "预测未来多少天，默认 20"},
+            "record": {"type": "boolean", "description": "是否写入预测账本"},
+            "update_skill": {"type": "boolean", "description": "是否更新 skills/finance-history-learning/SKILL.md"},
+        },
+        "required": ["symbol"],
+    },
+    run=_learn_from_history,
+)
+
 
 finance_tools = [
     finance_route_task_tool,
@@ -347,4 +374,5 @@ finance_tools = [
     finance_rebalance_paper_portfolio_tool,
     finance_mark_paper_portfolio_tool,
     finance_show_paper_portfolio_tool,
+    finance_learn_from_history_tool,
 ]

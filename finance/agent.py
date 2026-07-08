@@ -6,6 +6,7 @@ import re
 from .backtest import backtest_moving_average_cross, format_backtest, parse_strategy
 from .data import ProviderChain, export_history_csv
 from .debate import debate_stocks
+from .history_learning import learn_from_history, render_learning, save_learning, update_history_learning_skill
 from .indicators import calculate_indicators, format_indicators
 from .models import Financials, NewsItem, Quote, StockSnapshot, utc_now_iso
 from .paper_portfolio import (
@@ -16,6 +17,7 @@ from .paper_portfolio import (
     render_account,
     render_recommendation,
 )
+from .predictions import record_prediction
 from .quality import render_quality_screen
 from .report import render_comparison, render_daily_brief, render_stock_report
 from .resolver import resolve_symbol, resolve_symbol_text
@@ -235,6 +237,46 @@ class FinanceResearchAgent:
     def show_paper_portfolio(self, name: str = "default") -> str:
         return render_account(load_account(name))
 
+    def learn_from_history(
+        self,
+        symbol: str,
+        period: str = "2y",
+        horizon_days: int = 20,
+        record: bool = True,
+        update_skill: bool = True,
+    ) -> str:
+        normalized = _resolve_symbol(symbol)
+        try:
+            history = self.provider.get_history(normalized, period, "1d")
+        except Exception as exc:
+            return f"{normalized}: 历史学习失败，历史价格获取失败: {_compact_error(exc)}"
+        rule = learn_from_history(normalized, history, horizon_days=horizon_days)
+        save_path = save_learning(rule)
+        skill_path = update_history_learning_skill(rule) if update_skill else None
+        prediction_line = ""
+        if record and history and history[-1].close is not None:
+            prediction = record_prediction(
+                symbol=normalized,
+                direction=rule.predicted_direction,
+                horizon_days=horizon_days,
+                confidence=rule.confidence,
+                thesis=f"history-learning expected_return={rule.expected_return_pct:.2f}% features={rule.current_features}",
+                baseline_price=float(history[-1].close),
+                baseline_as_of=history[-1].date,
+                source="history-learning",
+            )
+            prediction_line = f"\n\nPrediction recorded: {prediction.id} due={prediction.due_at}"
+        lines = [
+            render_learning(rule),
+            "",
+            f"Learning saved: {save_path}",
+        ]
+        if skill_path:
+            lines.append(f"Skill updated: {skill_path}")
+        if prediction_line:
+            lines.append(prediction_line.strip())
+        return "\n".join(lines)
+
     def route_task(self, task: str) -> str:
         symbols = extract_symbols(task)
         if not symbols and _looks_like_stock_task(task):
@@ -251,6 +293,8 @@ class FinanceResearchAgent:
             return self.verify_symbol_task(task, symbols[0])
         if any(word in task for word in ("回测", "策略")) or "backtest" in lowered:
             return self.backtest_strategy(symbols[0], task, period or "2y")
+        if _is_history_learning_task(task):
+            return self.learn_from_history(symbols[0], period or "2y", _extract_horizon(task) or 20)
         if any(word in task for word in ("简报", "自选股")) or "brief" in lowered:
             return self.daily_brief(symbols, period or "3mo")
         if any(word in task for word in ("质量门禁", "去劣", "初筛", "checklist", "quality")):
@@ -353,8 +397,29 @@ def _extract_cash(task: str) -> float | None:
     return None
 
 
+def _extract_horizon(task: str) -> int | None:
+    match = re.search(r"未来\s*(\d{1,3})\s*天", task)
+    if match:
+        return int(match.group(1))
+    match = re.search(r"(\d{1,3})\s*(?:day|days|d)\b", task, flags=re.IGNORECASE)
+    if match:
+        return int(match.group(1))
+    if "一个月" in task or "1个月" in task:
+        return 20
+    if "三个月" in task or "3个月" in task:
+        return 60
+    return None
+
+
 def _is_market_update_task(task: str) -> bool:
     return any(token in task for token in ("今天", "今日", "当天", "现在", "最新", "情况", "怎么了", "股价", "行情"))
+
+
+def _is_history_learning_task(task: str) -> bool:
+    lowered = task.lower()
+    return any(token in task for token in ("历史数据中学习", "从历史中学习", "历史学习", "学习预测", "沉淀为 skill", "沉淀成 skill")) or any(
+        token in lowered for token in ("learn from history", "history learning", "historical learning")
+    )
 
 
 def _is_portfolio_task(task: str) -> bool:

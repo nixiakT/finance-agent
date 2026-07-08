@@ -46,6 +46,7 @@ PANEL_ROWS = [
     ("memory", "preference, correction, evolve"),
     ("prediction", "ledger, scorecard, review"),
     ("portfolio", "paper account, allocation, PnL"),
+    ("learning", "history patterns, skill update"),
     ("schedule", "wechat brief, due runner"),
     ("", ""),
     ("Market Sources", ""),
@@ -90,6 +91,8 @@ finance-agent 功能菜单
     记录方向预测、查看预测账本、到期评分，并按历史命中率生成复盘；加 save 会写入金融记忆。
   /portfolio init 1000000 AAPL MSFT NVDA | /portfolio status | /portfolio mark | /portfolio rebalance AAPL MSFT NVDA
     创建 100 万纸面投资账户，输出买入数量和仓位；之后可每日估值和再平衡，不会真实下单。
+  /learn-history AAPL 2y 20
+    从历史 K 线学习可解释预测规则，写入预测账本，并更新 finance-history-learning Skill。
   /schedule list | /schedule brief AAPL,MSFT,NVDA [interval_minutes] | /schedule portfolio [name] [interval_minutes] | /schedule run
     创建微信定时简报或组合每日估值任务，或执行到期任务。适合配合 cron 定时调用。
   /mcp
@@ -242,6 +245,8 @@ Basics:
     Record directional forecasts and score them later against realized prices.
   /portfolio init 1000000 AAPL MSFT NVDA | /portfolio status | /portfolio mark | /portfolio rebalance AAPL MSFT NVDA
     Create a paper account, show shares and allocation, then mark to market daily. It never sends real orders.
+  /learn-history AAPL 2y 20
+    Learn explainable forecast rules from historical candles, record the forecast, and update finance-history-learning Skill.
   /schedule list | /schedule brief AAPL,MSFT,NVDA [interval_minutes] | /schedule portfolio [name] [interval_minutes] | /schedule run
     Schedule WeChat briefs or portfolio marks and execute due jobs, usually from cron.
   /mcp

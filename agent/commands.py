@@ -98,6 +98,8 @@ class CommandRouter:
             return CommandResult(True, self._schedule(args))
         if command == "/portfolio":
             return CommandResult(True, self._portfolio(args))
+        if command in {"/learn-history", "/learn"}:
+            return CommandResult(True, self._learn_history(args))
         if command == "/sources":
             return CommandResult(True, self._sources())
         if command == "/search":
@@ -517,6 +519,22 @@ class CommandRouter:
         return (
             "用法：/portfolio init [cash] [symbols...] | /portfolio status [name] | "
             "/portfolio mark [name] | /portfolio rebalance [symbols...]"
+        )
+
+    def _learn_history(self, args: list[str]) -> str:
+        symbol = _require_arg(args, "/learn-history AAPL [period] [horizon_days]")
+        period = args[1] if len(args) > 1 else "2y"
+        horizon = int(args[2]) if len(args) > 2 and args[2].isdigit() else 20
+        self._trace_tool("finance_learn_from_history", {
+            "symbol": symbol,
+            "period": period,
+            "horizon_days": horizon,
+            "record": True,
+            "update_skill": True,
+        })
+        return self._with_result_trace(
+            "finance_learn_from_history",
+            self.finance.learn_from_history(symbol, period, horizon, True, True),
         )
 
     def _run_scheduled_job(self, job) -> str:  # noqa: ANN001

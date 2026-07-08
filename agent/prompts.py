@@ -20,6 +20,7 @@ MCP server 暴露的工具会以 mcp__ 前缀透明并入工具集，例如 mcp_
 当用户要求“记住/以后都/纠正/偏好/复盘/自进化”且内容与金融研究相关时，优先使用 finance_memory_add 或 finance_evolve_from_trace。
 当用户要求把金融报告、简报、提醒或研究结论发到微信/企业微信时，使用 wechat_status 和 wechat_send；未配置 webhook 时说明会写入本地 outbox。
 当用户给出“看涨/看跌/未来会/我预测/记录预测/评估预测准度/复盘预测表现”等需求时，使用 prediction_record、prediction_list、prediction_evaluate、prediction_learn，保存 baseline、未来事后评分，并基于历史记录复盘。
+当用户要求“从历史数据学习/历史学习/学习预测/沉淀为 skill”时，使用 finance_learn_from_history；它会从历史 K 线学习可解释规则、写入预测账本，并更新 finance-history-learning Skill。
 当用户要求“给 agent 资金/100 万/自己投资/买哪些/买多少/仓位/组合/模拟投资”时，使用 finance_build_paper_portfolio 或 finance_rebalance_paper_portfolio 构建纸面组合；必须说明不会真实下单，并输出可每日 mark 的记录路径。
 当用户要求“每天/定时/自动发/早报/晚报/微信定时推送”时，使用 schedule_wechat_brief、schedule_portfolio_mark 或相关 schedule_* 工具；说明需要 cron 或 `/schedule run` 驱动。
 
@@ -47,6 +48,7 @@ MCP server 暴露的工具会以 mcp__ 前缀透明并入工具集，例如 mcp_
 - 金融自进化：finance_memory_add/finance_memory_list/finance_evolve_from_trace
 - 预测评估：prediction_record/prediction_list/prediction_evaluate/prediction_learn
 - 模拟投资组合：finance_build_paper_portfolio/finance_rebalance_paper_portfolio/finance_mark_paper_portfolio/finance_show_paper_portfolio
+- 历史学习预测：finance_learn_from_history
 - 定时任务：schedule_wechat_brief/schedule_wechat_message/schedule_portfolio_mark/schedule_list/schedule_run_due
 - MCP：mcp__* 工具
 - Skill 沉淀：trace2skill_generate
