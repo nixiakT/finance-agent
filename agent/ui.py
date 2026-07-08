@@ -45,6 +45,7 @@ PANEL_ROWS = [
     ("wechat", "status, send, report outbox"),
     ("memory", "preference, correction, evolve"),
     ("prediction", "ledger, scorecard, review"),
+    ("portfolio", "paper account, allocation, PnL"),
     ("schedule", "wechat brief, due runner"),
     ("", ""),
     ("Market Sources", ""),
@@ -85,8 +86,10 @@ finance-agent 功能菜单
     把金融研究经验沉淀为本地 memory，并更新 finance-research-evolution Skill。
   /predict record AAPL up 30 0.65 <理由> | /predict list | /predict eval [all] | /predict learn [save]
     记录方向预测、查看预测账本、到期评分，并按历史命中率生成复盘；加 save 会写入金融记忆。
-  /schedule list | /schedule brief AAPL,MSFT,NVDA [interval_minutes] | /schedule run
-    创建微信定时简报任务，或执行到期任务。适合配合 cron 定时调用。
+  /portfolio init 1000000 AAPL MSFT NVDA | /portfolio status | /portfolio mark | /portfolio rebalance AAPL MSFT NVDA
+    创建 100 万纸面投资账户，输出买入数量和仓位；之后可每日估值和再平衡，不会真实下单。
+  /schedule list | /schedule brief AAPL,MSFT,NVDA [interval_minutes] | /schedule portfolio [name] [interval_minutes] | /schedule run
+    创建微信定时简报或组合每日估值任务，或执行到期任务。适合配合 cron 定时调用。
   /mcp
     显示已透明并入主循环的 MCP 工具。
   /security
@@ -231,8 +234,10 @@ Basics:
     Save finance learning to memory and update the finance-research-evolution Skill.
   /predict record AAPL up 30 0.65 <thesis> | /predict list | /predict eval [all] | /predict learn [save]
     Record directional forecasts and score them later against realized prices.
-  /schedule list | /schedule brief AAPL,MSFT,NVDA [interval_minutes] | /schedule run
-    Schedule WeChat briefs and execute due jobs, usually from cron.
+  /portfolio init 1000000 AAPL MSFT NVDA | /portfolio status | /portfolio mark | /portfolio rebalance AAPL MSFT NVDA
+    Create a paper account, show shares and allocation, then mark to market daily. It never sends real orders.
+  /schedule list | /schedule brief AAPL,MSFT,NVDA [interval_minutes] | /schedule portfolio [name] [interval_minutes] | /schedule run
+    Schedule WeChat briefs or portfolio marks and execute due jobs, usually from cron.
   /mcp
     Show MCP tools merged into the agent loop.
   /security

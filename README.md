@@ -16,6 +16,7 @@ Language / 语言: 中文 | [English](README_EN.md)
 - 投资框架：巴菲特/芒格、段永平、李录、达利欧。
 - 多智能体辩论：Bull、Bear、Value、Buffett、Munger、Duan、Li Lu、Dalio、Anti-Bias、Macro、Risk、Judge，并输出纪律结论、镜子测试和可检验预测。
 - 预测评分闭环：记录每次看涨/看跌/中性判断，按真实后续价格评估命中率、置信度和高置信错判。
+- 模拟投资账户：给 agent 100 万纸面资金，按股票池评分、计算买入数量和仓位，并每日记录净值。
 - 策略辅助：移动均线交叉策略回测。
 - 自选股简报：批量生成跟踪摘要。
 - 微信连接与定时推送：支持 dry-run outbox、企业微信 webhook、本地 relay 和本地定时简报任务。
@@ -57,6 +58,7 @@ python -m agent.cli "比较 NVDA 和 AMD 的基本面和技术面"
 python -m agent.cli "用巴菲特、段永平、达利欧三个视角分析 NVDA，并让多智能体辩论是否值得继续跟踪"
 python -m agent.cli "帮我回测 TSLA 的 20 日均线上穿 60 日均线策略"
 python -m agent.cli "生成我的自选股每日简报：AAPL, MSFT, NVDA"
+python -m agent.cli "给 agent 100 万模拟投资 AAPL, MSFT, NVDA, AMD，告诉我买哪些、买多少"
 ```
 
 ## 常用命令
@@ -72,7 +74,10 @@ python -m agent.cli "生成我的自选股每日简报：AAPL, MSFT, NVDA"
 /evolve <复盘/纠错/轨迹>       把金融经验沉淀为 memory 和 Skill
 /predict record/list/eval/learn
                               记录预测、查看预测账本、事后评分和复盘学习
-/schedule list/brief/run     创建微信定时简报任务，或执行到期任务
+/portfolio init/status/mark/rebalance
+                              创建 100 万纸面组合、查看持仓、每日估值、按股票池再平衡
+/schedule list/brief/portfolio/run
+                              创建微信定时简报或组合每日估值任务，或执行到期任务
 /mcp                         查看已接入 MCP 工具
 /security                    查看权限分层和注入防护策略
 /resolve minimax             解析公司名/简称到 A 股、港股、美股候选代码
@@ -152,6 +157,9 @@ FINANCE_WECHAT_MODE=dry-run
 /predict record AAPL up 30 0.65 服务收入和回购支撑
 /predict eval all
 /predict learn save
+/portfolio init 1000000 AAPL MSFT NVDA AMD GOOGL
+/portfolio mark
+/schedule portfolio default 1440
 /schedule brief AAPL,MSFT,NVDA 1440
 /schedule run
 ```
@@ -160,7 +168,9 @@ FINANCE_WECHAT_MODE=dry-run
 
 预测评分闭环会把每次方向判断保存到 `.finance_agent/predictions.jsonl`，包含 baseline 价格、期限、置信度和 thesis。到期后运行 `/predict eval`，系统会拉取最新价格并计算方向命中、实际收益和置信度加权分数。`/predict eval all` 可用于 Demo 立即评分未到期预测；`/predict learn` 会按方向桶、命中率、置信度失误和高置信错判生成复盘，用来量化研究框架是否真的有效。`/predict learn save` 会把复盘写入金融 memory，后续可用 `/memory list` 查看。
 
-微信定时推送采用本地文件任务表 `.finance_agent/scheduled_jobs.json`。创建任务后，需要用 cron、launchd 或手动定期执行：
+模拟投资账户会写入 `.finance_agent/portfolio_default.json`。`/portfolio init 1000000 AAPL MSFT NVDA` 会根据当前行情、基本面、技术面和数据源置信度生成纸面持仓；`/portfolio mark` 会按最新价格追加一条净值记录；`/portfolio rebalance ...` 会用新的股票池重新计算仓位。它只做纸面组合，不会连接真实券商或真实下单。
+
+微信定时推送采用本地文件任务表 `.finance_agent/scheduled_jobs.json`。`/schedule portfolio default 1440` 可以每天给纸面组合估值并推送到微信连接器或 dry-run outbox。创建任务后，需要用 cron、launchd 或手动定期执行：
 
 ```bash
 python -m agent.cli /schedule run

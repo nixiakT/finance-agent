@@ -67,6 +67,33 @@ def _daily_brief(symbols: list[str] | str, period: str = "3mo") -> str:
     return _agent.daily_brief(symbols, period)
 
 
+def _build_paper_portfolio(
+    symbols: list[str] | str,
+    initial_cash: float = 1_000_000,
+    period: str = "1y",
+    max_positions: int = 5,
+    name: str = "default",
+) -> str:
+    return _agent.build_paper_portfolio(symbols, initial_cash, period, max_positions, name)
+
+
+def _rebalance_paper_portfolio(
+    symbols: list[str] | str,
+    period: str = "1y",
+    max_positions: int = 5,
+    name: str = "default",
+) -> str:
+    return _agent.rebalance_paper_portfolio(symbols, period, max_positions, name)
+
+
+def _mark_paper_portfolio(name: str = "default") -> str:
+    return _agent.mark_paper_portfolio(name)
+
+
+def _show_paper_portfolio(name: str = "default") -> str:
+    return _agent.show_paper_portfolio(name)
+
+
 finance_route_task_tool = Tool(
     name="finance_route_task",
     description="根据自然语言金融任务自动选择报告、对比、辩论、回测或自选股简报。",
@@ -244,6 +271,63 @@ finance_daily_brief_tool = Tool(
     run=_daily_brief,
 )
 
+finance_build_paper_portfolio_tool = Tool(
+    name="finance_build_paper_portfolio",
+    description="用候选股票池和给定资金构建纸面模拟投资组合，输出买入数量、仓位、评分和风险提示；不会真实下单。",
+    parameters={
+        "type": "object",
+        "properties": {
+            "symbols": {
+                "oneOf": [
+                    {"type": "array", "items": {"type": "string"}},
+                    {"type": "string"},
+                ]
+            },
+            "initial_cash": {"type": "number", "description": "初始资金，默认 1000000"},
+            "period": {"type": "string"},
+            "max_positions": {"type": "integer"},
+            "name": {"type": "string", "description": "本地模拟账户名称"},
+        },
+        "required": ["symbols"],
+    },
+    run=_build_paper_portfolio,
+)
+
+finance_rebalance_paper_portfolio_tool = Tool(
+    name="finance_rebalance_paper_portfolio",
+    description="根据当前候选股票池重新计算纸面组合仓位，并覆盖本地模拟账户持仓；不会真实下单。",
+    parameters={
+        "type": "object",
+        "properties": {
+            "symbols": {
+                "oneOf": [
+                    {"type": "array", "items": {"type": "string"}},
+                    {"type": "string"},
+                ]
+            },
+            "period": {"type": "string"},
+            "max_positions": {"type": "integer"},
+            "name": {"type": "string"},
+        },
+        "required": ["symbols"],
+    },
+    run=_rebalance_paper_portfolio,
+)
+
+finance_mark_paper_portfolio_tool = Tool(
+    name="finance_mark_paper_portfolio",
+    description="按最新行情给本地纸面组合估值，并追加一条每日净值记录。",
+    parameters={"type": "object", "properties": {"name": {"type": "string"}}},
+    run=_mark_paper_portfolio,
+)
+
+finance_show_paper_portfolio_tool = Tool(
+    name="finance_show_paper_portfolio",
+    description="查看本地纸面组合账户、持仓、收益和最近记录。",
+    parameters={"type": "object", "properties": {"name": {"type": "string"}}},
+    run=_show_paper_portfolio,
+)
+
 
 finance_tools = [
     finance_route_task_tool,
@@ -259,4 +343,8 @@ finance_tools = [
     finance_debate_stocks_tool,
     finance_backtest_strategy_tool,
     finance_daily_brief_tool,
+    finance_build_paper_portfolio_tool,
+    finance_rebalance_paper_portfolio_tool,
+    finance_mark_paper_portfolio_tool,
+    finance_show_paper_portfolio_tool,
 ]

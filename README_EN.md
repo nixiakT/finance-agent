@@ -16,6 +16,7 @@ Command-line stock research assistant for quotes, fundamentals, news verificatio
 - Investment frameworks: Buffett/Munger, Duan Yongping, Li Lu, and Dalio.
 - Multi-agent debate: Bull, Bear, Value, Buffett, Munger, Duan, Li Lu, Dalio, Anti-Bias, Macro, Risk, and Judge, with discipline label, mirror test, and testable prediction.
 - Prediction scoring loop: record bullish/bearish/neutral calls, evaluate future outcomes, and review accuracy, confidence calibration, and high-confidence misses.
+- Paper investment account: give the agent 1,000,000 paper cash, score a stock pool, calculate shares and allocation, and record daily NAV.
 - Strategy helper: moving-average crossover backtests.
 - Watchlist briefs: batch summaries for tracked symbols.
 - WeChat delivery and scheduling: dry-run outbox, WeCom webhook, local relay, and scheduled local brief jobs.
@@ -55,6 +56,7 @@ python -m agent.cli "Compare NVDA and AMD on fundamentals and technicals"
 python -m agent.cli "Analyze NVDA from Buffett, Duan, and Dalio perspectives, then run a multi-agent debate"
 python -m agent.cli "Backtest a TSLA 20-day / 60-day moving-average crossover strategy"
 python -m agent.cli "Generate a daily brief for AAPL, MSFT, NVDA"
+python -m agent.cli "Give the agent 1,000,000 paper cash to invest in AAPL, MSFT, NVDA, AMD; show what to buy and how much"
 ```
 
 ## Common Commands
@@ -69,7 +71,10 @@ python -m agent.cli "Generate a daily brief for AAPL, MSFT, NVDA"
 /evolve <review/trace>        Save reusable finance lessons into memory and skills
 /predict record/list/eval/learn
                               Record predictions, list the ledger, evaluate outcomes, and learn from history
-/schedule list/brief/run     Create scheduled WeChat briefs or execute due jobs
+/portfolio init/status/mark/rebalance
+                              Create a 1,000,000 paper portfolio, inspect holdings, mark daily NAV, and rebalance
+/schedule list/brief/portfolio/run
+                              Create scheduled WeChat briefs or portfolio marks, or execute due jobs
 /mcp                         Show registered MCP tools
 /security                    Show permission and injection-protection policy
 /resolve minimax             Resolve a company name or alias to A/HK/US ticker candidates
@@ -151,6 +156,9 @@ Useful commands:
 /predict record AAPL up 30 0.65 services revenue and buybacks support the thesis
 /predict eval all
 /predict learn save
+/portfolio init 1000000 AAPL MSFT NVDA AMD GOOGL
+/portfolio mark
+/schedule portfolio default 1440
 /schedule brief AAPL,MSFT,NVDA 1440
 /schedule run
 ```
@@ -159,7 +167,9 @@ Finance self-evolution writes preferences, corrections, data-source lessons, and
 
 The prediction scoring loop writes calls to `.finance_agent/predictions.jsonl`, including baseline price, horizon, confidence, and thesis. `/predict eval` fetches the later price and computes directional hit, realized return, and confidence-weighted score. `/predict eval all` is useful for demos. `/predict learn` reviews direction buckets, accuracy, confidence errors, and high-confidence misses. `/predict learn save` stores the review in finance memory.
 
-Scheduled WeChat delivery uses `.finance_agent/scheduled_jobs.json`. Create jobs with `/schedule brief`, then run due jobs manually or through cron/launchd:
+The paper investment account writes to `.finance_agent/portfolio_default.json`. `/portfolio init 1000000 AAPL MSFT NVDA` builds paper holdings from current quotes, fundamentals, indicators, and data-source confidence; `/portfolio mark` appends a NAV record using latest prices; `/portfolio rebalance ...` recalculates allocation from a new stock pool. It is paper-only and never connects to a broker or sends real orders.
+
+Scheduled WeChat delivery uses `.finance_agent/scheduled_jobs.json`. `/schedule portfolio default 1440` can mark the paper portfolio daily and send it to the WeChat connector or dry-run outbox. Create jobs with `/schedule brief` or `/schedule portfolio`, then run due jobs manually or through cron/launchd:
 
 ```bash
 python -m agent.cli /schedule run

@@ -120,6 +120,7 @@
 - [x] 增加微信连接适配器：默认 dry-run outbox，支持企业微信 webhook 和本地 HTTP relay。
 - [x] 增加金融自进化 memory：保存偏好、纠错、数据源经验、风险规则，并支持从轨迹更新 `finance-research-evolution` Skill。
 - [x] 增加预测记录、事后评分和复盘学习：保存 baseline、方向、期限、置信度和 thesis，用真实后续价格评估命中率，并按方向桶/高置信错判复盘；复盘可保存进金融 memory。
+- [x] 增加 100 万纸面模拟投资账户：按股票池评分、生成持仓/仓位/买入数量，并支持每日净值记录和再平衡。
 - [x] 增加微信定时推送任务：本地任务表 + `/schedule run`，可由 cron/launchd 驱动每日简报。
 - [x] 增强多智能体辩论：加入 Buffett、Munger、Duan、Dalio、Anti-Bias 角色和可检验预测字段。
 
@@ -147,6 +148,7 @@
 - Finance Evolution：`finance_memory_add/list` 和 `finance_evolve_from_trace` 支持金融偏好、纠错、数据源经验和研究流程沉淀。
 - WeChat Connector：`wechat_status/wechat_send` 与 `/wechat` 支持企业微信群机器人、本地 relay 和 dry-run outbox。
 - Prediction Ledger：`prediction_record/list/evaluate/learn` 与 `/predict` 支持记录预测、未来评分和历史复盘。
+- Paper Portfolio：`finance_build/rebalance/mark/show_paper_portfolio` 与 `/portfolio` 支持纸面建仓、每日估值和组合复盘。
 - Scheduler：`schedule_wechat_brief/message/list/run` 与 `/schedule` 支持定时微信简报。
 - CLI 欢迎页：`python -m agent.cli` 显示招财猫入口。
 - CLI 品牌页：欢迎页包含“招财进宝”金融猫、研究边界和核心能力入口。

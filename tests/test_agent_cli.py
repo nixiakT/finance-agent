@@ -295,9 +295,26 @@ def test_schedule_command_creates_and_runs_wechat_message(tmp_path: Any, monkeyp
     router = CommandRouter(ToolRegistry(), finance_agent=StatusFinance())  # type: ignore[arg-type]
     created = router.handle("/schedule message hello").output
     ran = router.handle("/schedule run").output
+    portfolio = router.handle("/schedule portfolio default").output
 
     assert "Scheduled" in created
     assert "Scheduled jobs executed" in ran
+    assert "Scheduled" in portfolio
+
+
+def test_portfolio_command_builds_and_marks_paper_account(tmp_path: Any, monkeypatch: pytest.MonkeyPatch) -> None:
+    import finance.paper_portfolio as portfolio
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(portfolio, "PORTFOLIO_DIR", tmp_path / ".finance_agent")
+
+    router = CommandRouter(ToolRegistry(), finance_agent=PortfolioFinance())  # type: ignore[arg-type]
+    built = router.handle("/portfolio init 1000000 AAPL MSFT NVDA").output
+    marked = router.handle("/portfolio mark").output
+
+    assert "# 模拟投资账户" in built
+    assert "候选评分" in built
+    assert "累计收益" in marked
 
 
 def test_resolve_command_uses_finance_resolver() -> None:
@@ -389,6 +406,7 @@ def test_main_routes_natural_finance_task_deterministically(capsys: Any, monkeyp
 
 def test_finance_task_router_does_not_capture_general_dev_tasks() -> None:
     assert _should_route_finance("SpaceX 最近情况如何")
+    assert _should_route_finance("给 agent 100万 自己投资 AAPL MSFT NVDA 买多少")
     assert not _should_route_finance("open README and replace a heading")
 
 
@@ -453,3 +471,63 @@ class StaticFinance(StatusFinance):
             indicators={},
             fetched_at=utc_now_iso(),
         )
+
+
+class PortfolioFinance(StatusFinance):
+    def build_paper_portfolio(
+        self,
+        symbols: list[str] | str,
+        initial_cash: float = 1_000_000,
+        period: str = "1y",
+        max_positions: int = 5,
+        name: str = "default",
+    ) -> str:
+        from finance.models import Financials, Quote, StockSnapshot, utc_now_iso
+        from finance.paper_portfolio import construct_portfolio, render_recommendation
+
+        snapshots = [
+            StockSnapshot(
+                symbol=symbol,
+                quote=Quote(symbol=symbol, price=100, source="STATIC", as_of=utc_now_iso(), is_realtime=True),
+                history=[],
+                financials=Financials(
+                    symbol=symbol,
+                    source="STATIC",
+                    as_of=utc_now_iso(),
+                    pe_ratio=20,
+                    free_cash_flow=1_000,
+                    return_on_equity=0.18,
+                    profit_margin=0.22,
+                ),
+                news=[],
+                indicators={"return_3m_pct": 10, "return_1y_pct": 20, "annualized_volatility_pct": 20},
+                fetched_at=utc_now_iso(),
+            )
+            for symbol in symbols
+        ]
+        account, scores = construct_portfolio(snapshots, initial_cash=initial_cash, name=name)
+        return render_recommendation(account, scores)
+
+    def mark_paper_portfolio(self, name: str = "default") -> str:
+        from finance.models import Quote, utc_now_iso
+        from finance.paper_portfolio import mark_to_market, render_account
+
+        account = mark_to_market(
+            get_quote=lambda symbol: Quote(symbol=symbol, price=101, source="STATIC", as_of=utc_now_iso()),
+            name=name,
+        )
+        return render_account(account)
+
+    def show_paper_portfolio(self, name: str = "default") -> str:
+        from finance.paper_portfolio import load_account, render_account
+
+        return render_account(load_account(name))
+
+    def rebalance_paper_portfolio(
+        self,
+        symbols: list[str] | str,
+        period: str = "1y",
+        max_positions: int = 5,
+        name: str = "default",
+    ) -> str:
+        return self.build_paper_portfolio(symbols, 1_000_000, period, max_positions, name)

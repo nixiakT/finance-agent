@@ -8,6 +8,14 @@ from .data import ProviderChain, export_history_csv
 from .debate import debate_stocks
 from .indicators import calculate_indicators, format_indicators
 from .models import Financials, NewsItem, Quote, StockSnapshot, utc_now_iso
+from .paper_portfolio import (
+    construct_portfolio,
+    load_account,
+    mark_to_market,
+    rebalance_portfolio,
+    render_account,
+    render_recommendation,
+)
 from .quality import render_quality_screen
 from .report import render_comparison, render_daily_brief, render_stock_report
 from .resolver import resolve_symbol, resolve_symbol_text
@@ -186,6 +194,47 @@ class FinanceResearchAgent:
         snapshots = [self.snapshot(symbol, period, 2) for symbol in symbol_list]
         return render_daily_brief(snapshots)
 
+    def build_paper_portfolio(
+        self,
+        symbols: list[str] | str,
+        initial_cash: float = 1_000_000.0,
+        period: str = "1y",
+        max_positions: int = 5,
+        name: str = "default",
+    ) -> str:
+        symbol_list = _coerce_symbols(symbols)
+        snapshots = [self.snapshot(symbol, period, 3) for symbol in symbol_list]
+        account, scores = construct_portfolio(
+            snapshots,
+            initial_cash=initial_cash,
+            max_positions=max_positions,
+            name=name,
+        )
+        return render_recommendation(account, scores)
+
+    def rebalance_paper_portfolio(
+        self,
+        symbols: list[str] | str,
+        period: str = "1y",
+        max_positions: int = 5,
+        name: str = "default",
+    ) -> str:
+        symbol_list = _coerce_symbols(symbols)
+        snapshots = [self.snapshot(symbol, period, 3) for symbol in symbol_list]
+        account, scores = rebalance_portfolio(
+            snapshots,
+            name=name,
+            max_positions=max_positions,
+        )
+        return render_recommendation(account, scores)
+
+    def mark_paper_portfolio(self, name: str = "default") -> str:
+        account = mark_to_market(get_quote=self.provider.get_quote, name=name)
+        return render_account(account)
+
+    def show_paper_portfolio(self, name: str = "default") -> str:
+        return render_account(load_account(name))
+
     def route_task(self, task: str) -> str:
         symbols = extract_symbols(task)
         if not symbols and _looks_like_stock_task(task):
@@ -194,6 +243,8 @@ class FinanceResearchAgent:
             symbols = ["AAPL"]
         lowered = task.lower()
         period = _extract_period(task)
+        if _is_portfolio_task(task):
+            return self.build_paper_portfolio(symbols, _extract_cash(task) or 1_000_000.0, period or "1y")
         if _is_market_update_task(task):
             return self.market_update_task(task, symbols[0])
         if any(word in task for word in ("标的", "代码", "上市", "是不是上市", "已经上市")):
@@ -287,8 +338,30 @@ def _extract_period(task: str) -> str:
     return ""
 
 
+def _extract_cash(task: str) -> float | None:
+    match = re.search(r"(\d+(?:\.\d+)?)\s*(万|w|W)", task)
+    if match:
+        return float(match.group(1)) * 10_000
+    match = re.search(r"(\d+(?:\.\d+)?)\s*(百万|million)", task, flags=re.IGNORECASE)
+    if match:
+        return float(match.group(1)) * 1_000_000
+    match = re.search(r"(\d+(?:\.\d+)?)\s*(?:元|cash|资金)", task, flags=re.IGNORECASE)
+    if match:
+        return float(match.group(1))
+    if "一百万" in task:
+        return 1_000_000.0
+    return None
+
+
 def _is_market_update_task(task: str) -> bool:
     return any(token in task for token in ("今天", "今日", "当天", "现在", "最新", "情况", "怎么了", "股价", "行情"))
+
+
+def _is_portfolio_task(task: str) -> bool:
+    lowered = task.lower()
+    return any(token in task for token in ("100万", "一百万", "模拟组合", "纸面组合", "自己投资", "买多少", "仓位", "建仓")) or any(
+        token in lowered for token in ("paper portfolio", "portfolio", "allocate", "allocation")
+    )
 
 
 def _resolve_symbol(symbol: str) -> str:

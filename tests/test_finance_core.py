@@ -8,6 +8,7 @@ from finance.agent import FinanceResearchAgent
 from finance.backtest import StrategyConfig, backtest_moving_average_cross, format_backtest, parse_strategy
 from finance.data import ProviderChain, ProviderError, SampleDataProvider, _news_matches
 from finance.models import Candle, Financials, NewsItem, Quote, StockSnapshot, utc_now_iso
+from finance.paper_portfolio import construct_portfolio, mark_to_market, render_account
 from finance.predictions import evaluate_prediction, record_prediction, render_learning_report
 from finance.quality import render_quality_screen
 from finance.report import render_stock_report
@@ -136,6 +137,52 @@ def test_route_task_selects_compare_and_backtest() -> None:
 
     assert "# 股票对比" in compare
     assert "# 策略回测结果" in backtest
+
+
+def test_route_task_builds_paper_portfolio_for_cash_allocation(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:  # noqa: ANN001
+    import finance.paper_portfolio as portfolio
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(portfolio, "PORTFOLIO_DIR", tmp_path / ".finance_agent")
+    agent = FinanceResearchAgent(provider=ProviderChain(providers=[StaticProvider()]))
+
+    output = agent.route_task("给 agent 100万 自己投资 AAPL MSFT NVDA 买多少")
+
+    assert "# 模拟投资账户" in output
+    assert "候选评分" in output
+    assert "不会执行真实交易" in output
+
+
+def test_paper_portfolio_constructs_and_marks_account(tmp_path) -> None:  # noqa: ANN001
+    snapshot = StockSnapshot(
+        symbol="AAPL",
+        quote=Quote(symbol="AAPL", price=100, source="STATIC", as_of=utc_now_iso(), is_realtime=True),
+        history=rising_candles(120),
+        financials=Financials(
+            symbol="AAPL",
+            source="STATIC",
+            as_of=utc_now_iso(),
+            pe_ratio=20,
+            free_cash_flow=1_000_000,
+            return_on_equity=0.18,
+            profit_margin=0.22,
+        ),
+        news=[NewsItem(title="Static headline")],
+        indicators={"return_3m_pct": 12, "return_1y_pct": 24, "annualized_volatility_pct": 20},
+        fetched_at=utc_now_iso(),
+    )
+
+    account, scores = construct_portfolio([snapshot], initial_cash=1_000_000, base_dir=tmp_path)
+    marked = mark_to_market(
+        get_quote=lambda symbol: Quote(symbol=symbol, price=110, source="STATIC", as_of=utc_now_iso()),
+        base_dir=tmp_path,
+    )
+    output = render_account(marked)
+
+    assert scores[0].score > 35
+    assert account.holdings
+    assert marked.history[-1]["event"] == "mark"
+    assert "累计收益" in output
 
 
 def test_debate_includes_berkshire_style_roles() -> None:

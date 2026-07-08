@@ -95,6 +95,8 @@ class CommandRouter:
             return CommandResult(True, self._predict(args))
         if command == "/schedule":
             return CommandResult(True, self._schedule(args))
+        if command == "/portfolio":
+            return CommandResult(True, self._portfolio(args))
         if command == "/sources":
             return CommandResult(True, self._sources())
         if command == "/search":
@@ -445,6 +447,12 @@ class CommandRouter:
             self._trace_tool("schedule_wechat_message", {"message": message})
             job = add_job("wechat_message", {"message": message}, 1440)
             return self._with_result_trace("schedule_wechat_message", f"Scheduled {job.id} next={job.next_run_at}")
+        if action == "portfolio":
+            name = args[1] if len(args) > 1 else "default"
+            interval = int(args[2]) if len(args) > 2 and args[2].isdigit() else 1440
+            self._trace_tool("schedule_portfolio_mark", {"name": name, "interval_minutes": interval})
+            job = add_job("wechat_portfolio_mark", {"name": name}, interval)
+            return self._with_result_trace("schedule_portfolio_mark", f"Scheduled {job.id} next={job.next_run_at}")
         if action == "run":
             self._trace_tool("schedule_run_due", {})
             results = run_due_jobs(self._run_scheduled_job)
@@ -454,7 +462,45 @@ class CommandRouter:
             for job, result in results:
                 lines.append(f"- {job.id} {job.kind}: {result}")
             return self._with_result_trace("schedule_run_due", "\n".join(lines))
-        return "用法：/schedule list | /schedule brief AAPL,MSFT,NVDA [interval_minutes] | /schedule message <content> | /schedule run"
+        return "用法：/schedule list | /schedule brief AAPL,MSFT,NVDA [interval_minutes] | /schedule portfolio [name] [interval_minutes] | /schedule message <content> | /schedule run"
+
+    def _portfolio(self, args: list[str]) -> str:
+        if not args or args[0].lower() in {"status", "show", "list"}:
+            name = args[1] if len(args) > 1 else "default"
+            self._trace_tool("finance_show_paper_portfolio", {"name": name})
+            return self._with_result_trace("finance_show_paper_portfolio", self.finance.show_paper_portfolio(name))
+        action = args[0].lower()
+        if action in {"init", "build"}:
+            cash = 1_000_000.0
+            symbols_start = 1
+            if len(args) > 1 and _is_number(args[1]):
+                cash = float(args[1])
+                symbols_start = 2
+            symbols = args[symbols_start:] or ["AAPL", "MSFT", "NVDA", "AMD", "GOOGL"]
+            self._trace_tool("finance_build_paper_portfolio", {
+                "symbols": symbols,
+                "initial_cash": cash,
+                "period": "1y",
+            })
+            return self._with_result_trace(
+                "finance_build_paper_portfolio",
+                self.finance.build_paper_portfolio(symbols, cash, "1y"),
+            )
+        if action in {"mark", "update"}:
+            name = args[1] if len(args) > 1 else "default"
+            self._trace_tool("finance_mark_paper_portfolio", {"name": name})
+            return self._with_result_trace("finance_mark_paper_portfolio", self.finance.mark_paper_portfolio(name))
+        if action in {"rebalance", "rebuild"}:
+            symbols = args[1:] or ["AAPL", "MSFT", "NVDA", "AMD", "GOOGL"]
+            self._trace_tool("finance_rebalance_paper_portfolio", {"symbols": symbols, "period": "1y"})
+            return self._with_result_trace(
+                "finance_rebalance_paper_portfolio",
+                self.finance.rebalance_paper_portfolio(symbols, "1y"),
+            )
+        return (
+            "用法：/portfolio init [cash] [symbols...] | /portfolio status [name] | "
+            "/portfolio mark [name] | /portfolio rebalance [symbols...]"
+        )
 
     def _run_scheduled_job(self, job) -> str:  # noqa: ANN001
         if job.kind == "wechat_brief":
@@ -462,6 +508,9 @@ class CommandRouter:
             return send_markdown(brief, title="Finance Agent Brief").status
         if job.kind == "wechat_message":
             return send_text(job.payload.get("message", ""), title="Finance Agent").status
+        if job.kind == "wechat_portfolio_mark":
+            report = self.finance.mark_paper_portfolio(job.payload.get("name", "default"))
+            return send_markdown(report, title="Finance Agent Portfolio").status
         return f"unsupported job kind: {job.kind}"
 
     def _sources(self) -> str:

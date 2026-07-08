@@ -24,6 +24,7 @@ DEFAULT_COMMANDS = [
     "/evolve ",
     "/predict ",
     "/schedule ",
+    "/portfolio ",
     "/lang ",
     "/quote ",
     "/quality ",
