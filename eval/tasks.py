@@ -6,6 +6,10 @@
 """
 from __future__ import annotations
 from dataclasses import dataclass
+from typing import Callable
+
+
+Trajectory = dict
 
 
 @dataclass
@@ -20,6 +24,58 @@ TOOLCALL_TESTSET: list[ToolCallCase] = [
     ToolCallCase("把 a.txt 的内容读出来", "read", {"path": "a.txt"}),
     ToolCallCase("在当前目录运行 ls", "bash", {"command": "ls"}),
     # TODO[Day7] 按你组的领域补充更多用例
+]
+
+
+@dataclass
+class Task:
+    name: str
+    instruction: str
+    check: Callable[[Trajectory], bool]
+
+
+def _tool_calls(traj: Trajectory) -> list[dict]:
+    return [
+        tc
+        for step in traj.get("steps", [])
+        for tc in step.get("tool_calls", [])
+    ]
+
+
+def _check_read_config(traj: Trajectory) -> bool:
+    used_read = any(tc.get("name") == "read" for tc in _tool_calls(traj))
+    return used_read and "30" in traj.get("final", "")
+
+
+def _check_list_dir(traj: Trajectory) -> bool:
+    return any(
+        tc.get("name") == "bash" and "ls" in str(tc.get("arguments", {}))
+        for tc in _tool_calls(traj)
+    )
+
+
+def _check_finance_report(traj: Trajectory) -> bool:
+    used_finance = any(
+        tc.get("name") in {"finance_get_quote", "finance_generate_report", "finance_route_task"}
+        for tc in _tool_calls(traj)
+    )
+    final = traj.get("final", "")
+    has_symbol = "AAPL" in final.upper() or "苹果" in final
+    has_finance_value = any(token in final for token in ["美元", "$", "价格", "风险", "报告"])
+    return used_finance and has_symbol and has_finance_value
+
+
+def _check_write_report(traj: Trajectory) -> bool:
+    used_write = any(tc.get("name") == "write" for tc in _tool_calls(traj))
+    final = traj.get("final", "").lower()
+    return used_write and ("report" in final or "报告" in final)
+
+
+SAMPLE_TASKS: list[Task] = [
+    Task("read-config", "读取 config.json，告诉我 timeout 是多少", _check_read_config),
+    Task("list-dir", "列出当前目录下的文件", _check_list_dir),
+    Task("finance-report", "查询 AAPL 并生成一段包含价格和风险提示的金融研究摘要", _check_finance_report),
+    Task("write-report", "把分析结果写入 report.md", _check_write_report),
 ]
 
 
