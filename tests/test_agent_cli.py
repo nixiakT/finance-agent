@@ -8,7 +8,7 @@ import pytest
 from agent.cli import TracePrinter, _should_route_finance, main
 from agent.commands import CommandRouter
 from agent.context import maybe_compact, truncate_observation
-from agent.loop import AgentLoop
+from agent.loop import AgentLoop, AgentSession
 from agent.ui import render_trace
 from finance.data import ProviderError
 from finance.evolution import add_memory, extract_learning, list_memories
@@ -156,6 +156,37 @@ def test_status_command_reports_runtime_summary(monkeypatch: pytest.MonkeyPatch)
     assert "https://example.com:8443/v1" in output
     assert "token=secret" not in output
     assert "user:pass" not in output
+
+
+def test_compact_command_requests_session_compaction() -> None:
+    router = CommandRouter(ToolRegistry(), finance_agent=StatusFinance())  # type: ignore[arg-type]
+
+    result = router.handle("/compact")
+
+    assert result.handled
+    assert result.compact
+
+
+def test_agent_session_compact_uses_backend_summary() -> None:
+    backend = SummarizingBackend()
+    loop = AgentLoop(backend=backend, registry=ToolRegistry(), system_prompt="system")
+    session = AgentSession(loop)
+    session.messages = [
+        {"role": "system", "content": "system"},
+        {"role": "user", "content": "old user request"},
+        {"role": "assistant", "content": "old assistant answer"},
+        {"role": "tool", "name": "web_fetch", "content": "old tool observation"},
+        {"role": "user", "content": "latest user request"},
+    ]
+
+    output = session.compact()
+
+    assert "已压缩" in output
+    assert backend.summary_requests == 1
+    assert session.messages[0] == {"role": "system", "content": "system"}
+    assert "model generated handoff summary" in session.messages[1]["content"]
+    assert "latest user request" in [message.get("content") for message in session.messages]
+    assert len(session.messages) < 5
 
 
 def test_proxy_command_can_set_and_report_proxy(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -435,6 +466,17 @@ class ToolThenAnswerBackend:
         if messages[-1].get("role") == "tool":
             return {"role": "assistant", "content": messages[-1]["content"], "tool_calls": []}
         return {"role": "assistant", "content": "", "tool_calls": [{"name": self.tool_name, "arguments": {}}]}
+
+
+class SummarizingBackend:
+    def __init__(self) -> None:
+        self.summary_requests = 0
+
+    def chat(self, messages: list[dict[str, Any]], tools: list[dict] | None = None) -> dict[str, Any]:
+        self.summary_requests += 1
+        assert tools == []
+        assert "old user request" in messages[-1]["content"]
+        return {"role": "assistant", "content": "model generated handoff summary", "tool_calls": []}
 
 
 class StatusFinance:

@@ -60,7 +60,9 @@ python -m agent.cli "Generate a daily brief for AAPL, MSFT, NVDA"
 ## Common Commands
 
 ```text
-/think on | /think off       Toggle high-level execution trace with timestamps, elapsed time, and tool summaries
+/think on | /think compact | /think off
+                              Toggle high-level execution trace; compact is the default folded summary
+/trace                       Expand the previous task's detailed thinking trace
 /lang zh | /lang en          Switch CLI language
 /status                      Show model, data sources, tool count, thinking status, and license
 /proxy status/test/set/off   Inspect, test, set, or disable proxy for web and market-data requests
@@ -80,10 +82,13 @@ python -m agent.cli "Generate a daily brief for AAPL, MSFT, NVDA"
 /news AAPL 5                 Fetch news
 /indicators AAPL 1y          Calculate indicators
 /report AAPL 1y              Generate stock research report
+/export-report AAPL 3mo reports/aapl.md
+                              Generate a report and save it as Markdown
 /compare NVDA AMD 1y         Compare stocks
 /debate NVDA AMD 1y          Run multi-agent debate
 /backtest TSLA 20 60 2y      Backtest moving-average strategy
 /brief AAPL MSFT NVDA        Generate watchlist brief
+/compact                     Summarize older interactive history and keep recent context
 /search "Zhipu 02513 stock"  Search public web pages for verification
 /fetch https://xueqiu.com/S/02513
                               Fetch and summarize a specific page
@@ -93,7 +98,7 @@ python -m agent.cli "Generate a daily brief for AAPL, MSFT, NVDA"
 
 Interactive input uses `prompt_toolkit`, with history, cursor movement, deletion, Ctrl+A/E/U/K, and slash-command completion. The CLI also cleans accidentally pasted `finance-agent >` prefixes.
 
-By default, the CLI displays a Claude Code-style high-level `thinking` trace, including model turns, tool choices, argument summaries, result previews, timestamps, and elapsed time. This is an auditable execution summary, not hidden chain-of-thought. Use `/think off` for quieter output.
+By default, the CLI displays a Claude Code-style high-level `thinking` trace in `compact` mode. It shows a one-line summary with tool count, elapsed time, and tool names while keeping the final answer separate. Use `/think on` for expanded details, `/trace` in interactive mode to expand the previous trace, or `/think off` for quieter output. This is an auditable execution summary, not hidden chain-of-thought.
 
 ## Proxy And Language
 

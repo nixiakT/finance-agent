@@ -36,6 +36,7 @@ class CommandResult:
     exit: bool = False
     clear: bool = False
     selfcheck: bool = False
+    compact: bool = False
     think: str | None = None
 
 
@@ -50,7 +51,7 @@ class CommandRouter:
         self.finance = finance_agent or FinanceResearchAgent()
         self.trace = trace
 
-    def handle(self, raw: str, think_enabled: bool = False) -> CommandResult:
+    def handle(self, raw: str, think_enabled: str | bool = False) -> CommandResult:
         text = raw.strip()
         if not text.startswith("/"):
             return CommandResult(False)
@@ -67,6 +68,8 @@ class CommandRouter:
             return CommandResult(True, exit=True)
         if command == "/clear":
             return CommandResult(True, clear=True, output=_msg("Session context cleared.", "已清空当前会话上下文。"))
+        if command == "/compact":
+            return CommandResult(True, compact=True)
         if command == "/selfcheck":
             return CommandResult(True, selfcheck=True)
         if command == "/think":

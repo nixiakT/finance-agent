@@ -66,6 +66,7 @@ python -m agent.cli "生成我的自选股每日简报：AAPL, MSFT, NVDA"
 /trace                       展开上一轮任务的详细 thinking 轨迹
 /lang zh | /lang en          切换 CLI 交互语言
 /status                      查看模型、数据源、工具数、thinking 状态和 License
+/compact                     用模型摘要压缩当前交互会话历史，保留最近上下文
 /proxy status/test/set/off   查看、测试、临时设置或关闭网页/行情查询代理
 /wechat status/send/send-md  查看微信连接状态，或发送报告到微信/本地 outbox
 /memory list/add             查看或新增金融研究偏好、纠错和风险规则

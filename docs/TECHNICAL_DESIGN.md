@@ -133,6 +133,7 @@ PY
 ```bash
 python -m agent.cli --selfcheck
 python -m agent.cli /status
+python -m agent.cli /compact
 python -m agent.cli /tools
 python -m agent.cli /mcp
 python -m agent.cli /security

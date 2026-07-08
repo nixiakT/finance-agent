@@ -11,6 +11,7 @@
 ```bash
 python -m agent.cli --selfcheck
 python -m agent.cli /status
+python -m agent.cli /compact
 ```
 
 ## B. 现场任务完成度
