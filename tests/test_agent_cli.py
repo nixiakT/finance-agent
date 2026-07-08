@@ -5,7 +5,7 @@ from typing import Any
 
 import pytest
 
-from agent.cli import _should_route_finance, main
+from agent.cli import TracePrinter, _should_route_finance, main
 from agent.commands import CommandRouter
 from agent.context import maybe_compact, truncate_observation
 from agent.loop import AgentLoop, AgentSession
@@ -354,12 +354,58 @@ def test_quality_command_uses_finance_quality_screen() -> None:
     assert output == "quality AAPL 3mo"
 
 
+def test_export_report_command_writes_markdown_file(tmp_path: Any, monkeypatch: pytest.MonkeyPatch) -> None:
+    import agent.commands as commands
+
+    class Finance:
+        def generate_report(self, symbol: str, period: str = "1y") -> str:
+            return f"# Report\n\nsymbol={symbol}\nperiod={period}\n"
+
+    def fake_guard_write(path: str, content: str):  # noqa: ANN001
+        resolved = tmp_path / path
+        resolved.parent.mkdir(parents=True, exist_ok=True)
+        return resolved
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(commands, "guard_write", fake_guard_write)
+    router = CommandRouter(ToolRegistry(), finance_agent=Finance())  # type: ignore[arg-type]
+
+    output = router.handle("/export-report AAPL 3mo reports/aapl.md").output
+
+    report_path = tmp_path / "reports" / "aapl.md"
+    assert report_path.read_text(encoding="utf-8") == "# Report\n\nsymbol=AAPL\nperiod=3mo\n"
+    assert "reports/aapl.md" in output
+
+
 def test_render_trace_includes_timestamp_and_elapsed() -> None:
     output = render_trace("tool result finance_get_quote", "AAPL -> ok", elapsed=1.234, timestamp="09:08:07")
 
     assert "thinking 09:08:07 +1.23s" in output
     assert "tool result finance_get_quote" in output
     assert "AAPL -> ok" in output
+
+
+def test_trace_printer_compact_mode_summarizes_without_detail(capsys: Any) -> None:
+    printer = TracePrinter(lambda: "compact")
+
+    printer.command("tool", 'finance_get_quote {"symbol":"AAPL"}')
+    printer.command("tool result", "finance_get_quote -> ok")
+    printer.flush()
+
+    output = capsys.readouterr().out
+    assert "thinking summary" in output
+    assert "1 tool" in output
+    assert "finance_get_quote" in output
+    assert '{"symbol":"AAPL"}' not in output
+
+
+def test_think_command_accepts_compact_mode() -> None:
+    router = CommandRouter(ToolRegistry(), finance_agent=StatusFinance())  # type: ignore[arg-type]
+
+    result = router.handle("/think compact", think_enabled="on")
+
+    assert result.think == "compact"
+    assert "compact" in result.output
 
 
 def test_main_handles_single_shot_slash_command(capsys: Any) -> None:
@@ -382,9 +428,9 @@ def test_main_handles_single_shot_slash_command_with_args(capsys: Any, monkeypat
 
     assert "搜索: 智谱 02513 股票" in output
     assert "02513" in output
-    assert "thinking" in output
-    assert "tool web_search" in output
-    assert "tool result web_search" in output
+    assert "thinking summary" in output
+    assert "web_search" in output
+    assert "tool result web_search" not in output
 
 
 def test_main_routes_natural_finance_task_deterministically(capsys: Any, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -400,6 +446,7 @@ def test_main_routes_natural_finance_task_deterministically(capsys: Any, monkeyp
 
     output = capsys.readouterr().out
 
+    assert "thinking summary" in output
     assert "finance_route_task" in output
     assert "routed finance task: SpaceX 最近情况如何" in output
 
