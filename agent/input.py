@@ -13,6 +13,7 @@ DEFAULT_COMMANDS = [
     "/think off",
     "/selfcheck",
     "/clear",
+    "/compact",
     "/exit",
     "/status",
     "/security",

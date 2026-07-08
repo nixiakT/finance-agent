@@ -193,6 +193,8 @@ def interactive() -> int:
                     think_enabled = result.think
                 if result.clear:
                     session.reset()
+                if result.compact:
+                    print(session.compact())
                 if result.selfcheck:
                     selfcheck()
                 if result.output:
@@ -239,6 +241,9 @@ def main(argv: list[str] | None = None) -> int:
         if result.handled:
             if result.selfcheck:
                 return selfcheck()
+            if result.compact:
+                print("当前没有交互会话可压缩。请进入交互模式后使用 /compact。")
+                return 0
             if result.output:
                 print(result.output)
             if result.exit:

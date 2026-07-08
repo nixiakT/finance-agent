@@ -84,6 +84,7 @@ python -m agent.cli "Generate a daily brief for AAPL, MSFT, NVDA"
 /debate NVDA AMD 1y          Run multi-agent debate
 /backtest TSLA 20 60 2y      Backtest moving-average strategy
 /brief AAPL MSFT NVDA        Generate watchlist brief
+/compact                     Summarize older interactive history and keep recent context
 /search "Zhipu 02513 stock"  Search public web pages for verification
 /fetch https://xueqiu.com/S/02513
                               Fetch and summarize a specific page

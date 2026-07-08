@@ -35,6 +35,7 @@ class CommandResult:
     exit: bool = False
     clear: bool = False
     selfcheck: bool = False
+    compact: bool = False
     think: bool | None = None
 
 
@@ -66,6 +67,8 @@ class CommandRouter:
             return CommandResult(True, exit=True)
         if command == "/clear":
             return CommandResult(True, clear=True, output=_msg("Session context cleared.", "已清空当前会话上下文。"))
+        if command == "/compact":
+            return CommandResult(True, compact=True)
         if command == "/selfcheck":
             return CommandResult(True, selfcheck=True)
         if command == "/think":

@@ -93,6 +93,8 @@ finance-agent 功能菜单
     显示权限分层、危险命令拦截和不可信内容隔离策略。
   /clear
     清空当前会话上下文。
+  /compact
+    用模型生成交接摘要压缩当前会话历史，保留最近上下文。
   /exit
     退出交互会话。
 
@@ -237,6 +239,8 @@ Basics:
     Show permission and prompt-injection safety policy.
   /clear
     Clear session context.
+  /compact
+    Summarize older conversation history with the model and keep recent context.
   /exit
     Exit interactive mode.
 

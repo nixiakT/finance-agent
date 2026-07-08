@@ -14,7 +14,7 @@
 from __future__ import annotations
 from typing import Any, Callable
 
-from agent.context import maybe_compact, truncate_observation
+from agent.context import compact_with_model, maybe_compact, truncate_observation
 from tools.base import ToolRegistry
 
 
@@ -110,6 +110,20 @@ class AgentSession:
 
     def reset(self) -> None:
         self.messages = [{"role": "system", "content": self.loop.system_prompt}]
+
+    def compact(self) -> str:
+        before = len(self.messages)
+        compacted, used_model_summary = compact_with_model(self.messages, self.loop.backend)
+        if compacted is self.messages:
+            return "当前会话上下文很短，无需压缩。"
+        self.messages[:] = compacted
+        self.loop._emit("context_compacted", {
+            "messages": len(self.messages),
+            "manual": True,
+            "model_summary": used_model_summary,
+        })
+        method = "模型摘要" if used_model_summary else "规则摘要"
+        return f"已压缩当前会话上下文（{method}）：{before} -> {len(self.messages)} 条消息。"
 
     def _compact_history(self) -> None:
         if len(self.messages) <= self.max_history_messages + 1:
