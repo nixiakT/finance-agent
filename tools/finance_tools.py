@@ -107,6 +107,10 @@ def _paper_trades(name: str = "default", limit: int = 30) -> str:
     return _agent.paper_trades(name, limit)
 
 
+def _paper_daily_pnl(name: str = "default", limit: int = 30) -> str:
+    return _agent.paper_daily_pnl(name, limit)
+
+
 def _review_paper_portfolio(
     symbols: list[str] | str = "",
     period: str = "6mo",
@@ -388,6 +392,16 @@ finance_paper_trades_tool = Tool(
     run=_paper_trades,
 )
 
+finance_paper_daily_pnl_tool = Tool(
+    name="finance_paper_daily_pnl",
+    description="查看纸面组合按日汇总的买入额、卖出额、已实现盈亏、期末净值和净值变化。",
+    parameters={
+        "type": "object",
+        "properties": {"name": {"type": "string"}, "limit": {"type": "integer"}},
+    },
+    run=_paper_daily_pnl,
+)
+
 finance_review_paper_portfolio_tool = Tool(
     name="finance_review_paper_portfolio",
     description="只读诊断纸面组合：解释当前持仓质量、相对强弱、数据置信度，并给出替换候选；不会改仓。",
@@ -446,6 +460,7 @@ finance_tools = [
     finance_show_paper_portfolio_tool,
     finance_sell_paper_holding_tool,
     finance_paper_trades_tool,
+    finance_paper_daily_pnl_tool,
     finance_review_paper_portfolio_tool,
     finance_learn_from_history_tool,
 ]

@@ -493,6 +493,10 @@ class CommandRouter:
             limit = int(args[1]) if len(args) > 1 and args[1].isdigit() else 30
             self._trace_tool("finance_paper_trades", {"name": "default", "limit": limit})
             return self._with_result_trace("finance_paper_trades", self.finance.paper_trades("default", limit))
+        if action in {"pnl", "daily", "daily-pnl"}:
+            limit = int(args[1]) if len(args) > 1 and args[1].isdigit() else 30
+            self._trace_tool("finance_paper_daily_pnl", {"name": "default", "limit": limit})
+            return self._with_result_trace("finance_paper_daily_pnl", self.finance.paper_daily_pnl("default", limit))
         if action in {"review", "diagnose"}:
             symbols = args[1:]
             self._trace_tool("finance_review_paper_portfolio", {"symbols": symbols, "period": "6mo"})
@@ -547,7 +551,7 @@ class CommandRouter:
         return (
             "用法：/portfolio init [cash] [symbols...] | /portfolio status [name] | "
             "/portfolio mark [name] | /portfolio sell AAPL [shares|all] [reason] | "
-            "/portfolio trades [limit] | /portfolio review [symbols...] | /portfolio rebalance [symbols...]"
+            "/portfolio trades [limit] | /portfolio pnl [limit] | /portfolio review [symbols...] | /portfolio rebalance [symbols...]"
         )
 
     def _learn_history(self, args: list[str]) -> str:

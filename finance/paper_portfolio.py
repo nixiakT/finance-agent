@@ -348,6 +348,29 @@ def render_transactions(account: PortfolioAccount, limit: int = 30) -> str:
     return "\n".join(lines)
 
 
+def render_daily_pnl(account: PortfolioAccount, limit: int = 30) -> str:
+    rows = _daily_pnl_rows(account)
+    if not rows:
+        return "每日买卖盈亏：暂无记录。"
+    lines = [
+        "# 每日买卖盈亏",
+        "",
+        "| 日期 | 买入额 | 卖出额 | 已实现盈亏 | 期末净值 | 当日净值变化 | 交易笔数 | 事件 |",
+        "|---|---:|---:|---:|---:|---:|---:|---|",
+    ]
+    for row in rows[-max(limit, 1):]:
+        lines.append(
+            f"| {row['date']} | {_money(row['buy_amount'])} | {_money(row['sell_amount'])} | "
+            f"{_money(row['realized_pnl'])} | {_money(row.get('ending_value'))} | "
+            f"{_money(row.get('nav_change'))} | {int(row['trade_count'])} | {row.get('events') or ''} |"
+        )
+    lines.extend([
+        "",
+        "说明：买入额/卖出额来自纸面交易流水；已实现盈亏只在 SELL 时确认；期末净值来自当日最后一条账户历史记录。",
+    ])
+    return "\n".join(lines)
+
+
 def render_portfolio_review(account: PortfolioAccount, scores: list[CandidateScore]) -> str:
     total = portfolio_value(account)
     score_by_symbol = {score.symbol.upper(): score for score in scores}
@@ -781,6 +804,73 @@ def _transaction(
 
 def _realized_pnl(account: PortfolioAccount) -> float:
     return sum(float(item.get("realized_pnl") or 0) for item in account.transactions)
+
+
+def _daily_pnl_rows(account: PortfolioAccount) -> list[dict[str, Any]]:
+    days: dict[str, dict[str, Any]] = {}
+    for item in account.transactions:
+        day = _date_key(item.get("as_of"))
+        if not day:
+            continue
+        row = days.setdefault(day, _empty_daily_row(day))
+        action = str(item.get("action") or "").upper()
+        amount = float(item.get("amount") or 0)
+        if action == "BUY":
+            row["buy_amount"] += amount
+        elif action == "SELL":
+            row["sell_amount"] += amount
+            row["realized_pnl"] += float(item.get("realized_pnl") or 0)
+        row["trade_count"] += 1
+        symbols = row.setdefault("_symbols", set())
+        if item.get("symbol"):
+            symbols.add(str(item.get("symbol")))
+
+    history_by_day: dict[str, list[dict[str, Any]]] = {}
+    for item in account.history:
+        day = _date_key(item.get("as_of"))
+        if not day:
+            continue
+        row = days.setdefault(day, _empty_daily_row(day))
+        event = str(item.get("event") or "")
+        if event:
+            events = row.setdefault("_events", set())
+            events.add(event)
+        history_by_day.setdefault(day, []).append(item)
+
+    previous_value: float | None = None
+    rows: list[dict[str, Any]] = []
+    for day in sorted(days):
+        row = days[day]
+        history = history_by_day.get(day) or []
+        if history:
+            ending = float(history[-1].get("total_value") or 0)
+            row["ending_value"] = ending
+            row["nav_change"] = 0.0 if previous_value is None else ending - previous_value
+            previous_value = ending
+        else:
+            row["ending_value"] = None
+            row["nav_change"] = None
+        row["events"] = ",".join(sorted(row.pop("_events", set())))
+        row["symbols"] = ",".join(sorted(row.pop("_symbols", set())))
+        rows.append(row)
+    return rows
+
+
+def _empty_daily_row(day: str) -> dict[str, Any]:
+    return {
+        "date": day,
+        "buy_amount": 0.0,
+        "sell_amount": 0.0,
+        "realized_pnl": 0.0,
+        "trade_count": 0,
+        "ending_value": None,
+        "nav_change": None,
+    }
+
+
+def _date_key(value: Any) -> str:
+    text = str(value or "")
+    return text[:10] if len(text) >= 10 else ""
 
 
 def _history_row(

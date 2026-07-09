@@ -15,6 +15,7 @@ from finance.paper_portfolio import (
     mark_to_market,
     rebalance_portfolio,
     render_account,
+    render_daily_pnl,
     render_portfolio_review,
     render_transactions,
     score_candidates,
@@ -209,6 +210,7 @@ def test_paper_portfolio_constructs_and_marks_account(tmp_path) -> None:  # noqa
     sold = sell_holding("AAPL", shares="all", price=120, base_dir=tmp_path, reason="unit sell")
     output = render_account(marked)
     trades = render_transactions(sold)
+    daily = render_daily_pnl(sold)
 
     assert scores[0].score > 35
     assert account.holdings
@@ -216,6 +218,8 @@ def test_paper_portfolio_constructs_and_marks_account(tmp_path) -> None:  # noqa
     assert "累计收益" in output
     assert "SELL" in trades
     assert sold.transactions[-1]["realized_pnl"] > 0
+    assert "每日买卖盈亏" in daily
+    assert "已实现盈亏" in daily
 
 
 def test_paper_portfolio_rebalance_preserves_cost_basis(tmp_path) -> None:  # noqa: ANN001

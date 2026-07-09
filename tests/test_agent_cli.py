@@ -313,6 +313,7 @@ def test_portfolio_command_builds_and_marks_paper_account(tmp_path: Any, monkeyp
     marked = router.handle("/portfolio mark").output
     sold = router.handle("/portfolio sell AAPL 止盈").output
     trades = router.handle("/portfolio trades").output
+    pnl = router.handle("/portfolio pnl").output
     review = router.handle("/portfolio review AAPL MSFT NVDA GOOGL").output
 
     assert "# 模拟投资账户" in built
@@ -321,6 +322,7 @@ def test_portfolio_command_builds_and_marks_paper_account(tmp_path: Any, monkeyp
     assert "SELL" in sold
     assert "止盈" in sold
     assert "纸面交易流水" in trades
+    assert "每日买卖盈亏" in pnl
     assert "纸面组合诊断" in review
 
 
@@ -610,6 +612,11 @@ class PortfolioFinance(StatusFinance):
         from finance.paper_portfolio import load_account, render_transactions
 
         return render_transactions(load_account(name), limit)
+
+    def paper_daily_pnl(self, name: str = "default", limit: int = 30) -> str:
+        from finance.paper_portfolio import load_account, render_daily_pnl
+
+        return render_daily_pnl(load_account(name), limit)
 
     def review_paper_portfolio(
         self,

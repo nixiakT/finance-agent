@@ -89,8 +89,8 @@ finance-agent 功能菜单
     把金融研究经验沉淀为本地 memory，并更新 finance-research-evolution Skill。
   /predict record AAPL up 30 0.65 <理由> | /predict list | /predict eval [all] | /predict learn [save]
     记录方向预测、查看预测账本、到期评分，并按历史命中率生成复盘；加 save 会写入金融记忆。
-  /portfolio init 1000000 AAPL MSFT NVDA | /portfolio review GOOGL AVGO | /portfolio mark | /portfolio sell AAPL all | /portfolio trades | /portfolio rebalance AAPL MSFT NVDA
-    创建 100 万纸面投资账户；之后可每日估值、诊断弱持仓/替换候选、模拟卖出、查看交易流水和再平衡。
+  /portfolio init 1000000 AAPL MSFT NVDA | /portfolio review GOOGL AVGO | /portfolio mark | /portfolio sell AAPL all | /portfolio trades | /portfolio pnl | /portfolio rebalance AAPL MSFT NVDA
+    创建 100 万纸面投资账户；之后可每日估值、诊断弱持仓/替换候选、模拟卖出、查看交易流水、每日盈亏和再平衡。
   /learn-history AAPL 2y 20
     从历史 K 线学习可解释预测规则，写入预测账本，并更新 finance-history-learning Skill。
   /schedule list | /schedule brief AAPL,MSFT,NVDA [interval_minutes] | /schedule portfolio [name] [interval_minutes] | /schedule run
@@ -243,8 +243,8 @@ Basics:
     Save finance learning to memory and update the finance-research-evolution Skill.
   /predict record AAPL up 30 0.65 <thesis> | /predict list | /predict eval [all] | /predict learn [save]
     Record directional forecasts and score them later against realized prices.
-  /portfolio init 1000000 AAPL MSFT NVDA | /portfolio review GOOGL AVGO | /portfolio mark | /portfolio sell AAPL all | /portfolio trades | /portfolio rebalance AAPL MSFT NVDA
-    Create a paper account, diagnose weak holdings/replacements, mark daily, simulate sells, inspect trades, and rebalance. It never sends real orders.
+  /portfolio init 1000000 AAPL MSFT NVDA | /portfolio review GOOGL AVGO | /portfolio mark | /portfolio sell AAPL all | /portfolio trades | /portfolio pnl | /portfolio rebalance AAPL MSFT NVDA
+    Create a paper account, diagnose weak holdings/replacements, mark daily, simulate sells, inspect trades, show daily PnL, and rebalance. It never sends real orders.
   /learn-history AAPL 2y 20
     Learn explainable forecast rules from historical candles, record the forecast, and update finance-history-learning Skill.
   /schedule list | /schedule brief AAPL,MSFT,NVDA [interval_minutes] | /schedule portfolio [name] [interval_minutes] | /schedule run

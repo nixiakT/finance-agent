@@ -15,6 +15,7 @@ from .paper_portfolio import (
     mark_to_market,
     rebalance_portfolio,
     render_account,
+    render_daily_pnl,
     render_portfolio_review,
     render_recommendation,
     render_transactions,
@@ -299,6 +300,9 @@ class FinanceResearchAgent:
 
     def paper_trades(self, name: str = "default", limit: int = 30) -> str:
         return render_transactions(load_account(name), limit)
+
+    def paper_daily_pnl(self, name: str = "default", limit: int = 30) -> str:
+        return render_daily_pnl(load_account(name), limit)
 
     def review_paper_portfolio(
         self,
