@@ -15,7 +15,9 @@ from finance.paper_portfolio import (
     mark_to_market,
     rebalance_portfolio,
     render_account,
+    render_portfolio_review,
     render_transactions,
+    score_candidates,
     sell_holding,
 )
 from finance.predictions import evaluate_prediction, record_prediction, render_learning_report
@@ -148,6 +150,22 @@ def test_route_task_selects_compare_and_backtest() -> None:
     assert "# 策略回测结果" in backtest
 
 
+def test_route_task_portfolio_review_handles_direct_tickers_without_resolver_network(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:  # noqa: ANN001
+    import finance.paper_portfolio as portfolio
+    import finance.agent as finance_agent
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(portfolio, "PORTFOLIO_DIR", tmp_path / ".finance_agent")
+    monkeypatch.setattr(finance_agent, "resolve_symbol", lambda symbol: (_ for _ in ()).throw(AssertionError("network resolver should not be called")))
+    agent = FinanceResearchAgent(provider=ProviderChain(providers=[StaticProvider()]))
+
+    agent.build_paper_portfolio(["AAPL", "MSFT"], 100_000)
+    output = agent.route_task("MSFT 为什么买 有没有更好选择 GOOGL AVGO")
+
+    assert "纸面组合诊断" in output
+    assert "持仓复盘" in output
+
+
 def test_route_task_builds_paper_portfolio_for_cash_allocation(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:  # noqa: ANN001
     import finance.paper_portfolio as portfolio
 
@@ -227,6 +245,60 @@ def test_paper_portfolio_rebalance_preserves_cost_basis(tmp_path) -> None:  # no
 
     assert aapl.avg_cost == 100
     assert {item["action"] for item in account.transactions} >= {"BUY", "SELL"}
+
+
+def test_paper_portfolio_scores_penalize_weak_relative_strength() -> None:
+    strong = StockSnapshot(
+        symbol="STRONG",
+        quote=Quote(symbol="STRONG", price=100, source="STATIC", as_of=utc_now_iso(), is_realtime=True),
+        history=[],
+        financials=Financials(symbol="STRONG", source="STATIC", as_of=utc_now_iso(), free_cash_flow=1, return_on_equity=0.2),
+        news=[],
+        indicators={"return_1m_pct": 6, "return_3m_pct": 18, "return_1y_pct": 35, "annualized_volatility_pct": 22},
+        fetched_at=utc_now_iso(),
+    )
+    weak = StockSnapshot(
+        symbol="WEAK",
+        quote=Quote(symbol="WEAK", price=100, source="STATIC", as_of=utc_now_iso(), is_realtime=True),
+        history=[],
+        financials=Financials(symbol="WEAK", source="STATIC", as_of=utc_now_iso(), free_cash_flow=1, return_on_equity=0.35, profit_margin=0.36),
+        news=[],
+        indicators={"return_1m_pct": 1, "return_3m_pct": 3, "return_1y_pct": -24, "annualized_volatility_pct": 22},
+        fetched_at=utc_now_iso(),
+    )
+
+    scores = {score.symbol: score for score in score_candidates([strong, weak])}
+
+    assert scores["STRONG"].score > scores["WEAK"].score
+    assert "弱" in scores["WEAK"].verdict or scores["WEAK"].score < 50
+    assert any("相对弱势" in warning or "相对强度" in warning for warning in scores["WEAK"].warnings)
+
+
+def test_portfolio_review_flags_weak_holding_and_replacements(tmp_path) -> None:  # noqa: ANN001
+    weak_snapshot = StockSnapshot(
+        symbol="WEAK",
+        quote=Quote(symbol="WEAK", price=100, source="STATIC", as_of=utc_now_iso(), is_realtime=True),
+        history=[],
+        financials=Financials(symbol="WEAK", source="STATIC", as_of=utc_now_iso(), free_cash_flow=1, return_on_equity=0.35, profit_margin=0.36),
+        news=[],
+        indicators={"return_1m_pct": 1, "return_3m_pct": 2, "return_1y_pct": -25, "annualized_volatility_pct": 20},
+        fetched_at=utc_now_iso(),
+    )
+    strong_snapshot = StockSnapshot(
+        symbol="STRONG",
+        quote=Quote(symbol="STRONG", price=100, source="STATIC", as_of=utc_now_iso(), is_realtime=True),
+        history=[],
+        financials=Financials(symbol="STRONG", source="STATIC", as_of=utc_now_iso(), free_cash_flow=1, return_on_equity=0.25, profit_margin=0.25),
+        news=[],
+        indicators={"return_1m_pct": 8, "return_3m_pct": 20, "return_1y_pct": 40, "annualized_volatility_pct": 20},
+        fetched_at=utc_now_iso(),
+    )
+    account, _ = construct_portfolio([weak_snapshot], initial_cash=100_000, base_dir=tmp_path, min_score=30)
+    output = render_portfolio_review(account, score_candidates([weak_snapshot, strong_snapshot]))
+
+    assert "纸面组合诊断" in output
+    assert "低置信持仓" in output
+    assert "STRONG" in output
 
 
 def test_history_learning_generates_forecast_and_skill(tmp_path) -> None:  # noqa: ANN001

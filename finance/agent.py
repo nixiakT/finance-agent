@@ -15,9 +15,11 @@ from .paper_portfolio import (
     mark_to_market,
     rebalance_portfolio,
     render_account,
+    render_portfolio_review,
     render_recommendation,
     render_transactions,
     sell_holding,
+    score_candidates,
 )
 from .predictions import record_prediction
 from .quality import render_quality_screen
@@ -92,6 +94,46 @@ class FinanceResearchAgent:
             financials=financials,
             news=news,
             indicators=indicators,
+            fetched_at=utc_now_iso(),
+        )
+
+    def quick_snapshot(self, symbol: str, period: str = "6mo") -> StockSnapshot:
+        normalized = _resolve_symbol(symbol)
+        errors: list[str] = []
+        try:
+            quote = self.provider.get_quote(normalized)
+        except Exception as exc:
+            quote = Quote(
+                symbol=normalized,
+                source="UNAVAILABLE",
+                as_of=utc_now_iso(),
+                is_realtime=False,
+                notes=[f"行情获取失败: {_compact_error(exc)}"],
+            )
+            errors.append(f"行情获取失败: {_compact_error(exc)}")
+        try:
+            history = self.provider.get_history(normalized, period, "1d")
+        except Exception as exc:
+            history = []
+            errors.append(f"历史价格获取失败: {_compact_error(exc)}")
+        financials = Financials(
+            symbol=normalized,
+            source="SKIPPED",
+            as_of=utc_now_iso(),
+            market_cap=quote.market_cap,
+            pe_ratio=quote.pe_ratio,
+            eps=quote.eps,
+            notes=["quick review skips full fundamentals for speed"],
+        )
+        if errors:
+            _extend_unique(quote.notes, errors)
+        return StockSnapshot(
+            symbol=normalized,
+            quote=quote,
+            history=history,
+            financials=financials,
+            news=[],
+            indicators=calculate_indicators(history),
             fetched_at=utc_now_iso(),
         )
 
@@ -258,6 +300,30 @@ class FinanceResearchAgent:
     def paper_trades(self, name: str = "default", limit: int = 30) -> str:
         return render_transactions(load_account(name), limit)
 
+    def review_paper_portfolio(
+        self,
+        symbols: list[str] | str | None = None,
+        period: str = "6mo",
+        name: str = "default",
+    ) -> str:
+        account = load_account(name)
+        candidates = _coerce_symbols(symbols or []) if symbols else []
+        current = [holding.symbol for holding in account.holdings]
+        fallback = [] if candidates else ["AAPL", "MSFT", "NVDA", "AMD", "GOOGL", "AVGO", "TSLA", "JPM", "V"]
+        symbol_list = _unique_symbols([*current, *candidates, *fallback])
+        snapshots: list[StockSnapshot] = []
+        failures: list[str] = []
+        for symbol in symbol_list:
+            try:
+                snapshots.append(self.quick_snapshot(symbol, period))
+            except Exception as exc:
+                failures.append(f"{symbol}: {_compact_error(exc)}")
+        scores = score_candidates(snapshots)
+        output = render_portfolio_review(account, scores)
+        if failures:
+            output += "\n\n## 数据失败\n" + "\n".join(f"- {item}" for item in failures[:8])
+        return output
+
     def learn_from_history(
         self,
         symbol: str,
@@ -306,6 +372,8 @@ class FinanceResearchAgent:
             symbols = ["AAPL"]
         lowered = task.lower()
         period = _extract_period(task)
+        if _is_portfolio_review_task(task):
+            return self.review_paper_portfolio(symbols, period or "6mo")
         if _is_portfolio_task(task):
             return self.build_paper_portfolio(symbols, _extract_cash(task) or 1_000_000.0, period or "1y")
         if _is_market_update_task(task):
@@ -388,6 +456,19 @@ def _coerce_symbols(symbols: list[str] | str) -> list[str]:
     return [_resolve_symbol(symbol) for symbol in symbols if symbol]
 
 
+def _unique_symbols(symbols: list[str]) -> list[str]:
+    seen: set[str] = set()
+    result: list[str] = []
+    for symbol in symbols:
+        normalized = _resolve_symbol(symbol)
+        key = normalized.upper()
+        if key in seen:
+            continue
+        seen.add(key)
+        result.append(normalized)
+    return result
+
+
 def _extract_period(task: str) -> str:
     lowered = task.lower()
     if any(token in task for token in ("三个月", "3个月", "近三月", "最近三月")) or "3mo" in lowered:
@@ -450,7 +531,17 @@ def _is_portfolio_task(task: str) -> bool:
     )
 
 
+def _is_portfolio_review_task(task: str) -> bool:
+    lowered = task.lower()
+    return any(token in task for token in ("为什么买", "为什么要买", "更好选择", "替换", "调仓建议", "谁拖累", "持仓诊断", "组合诊断", "组合表现")) or any(
+        token in lowered for token in ("why buy", "better choice", "replacement", "replace", "review portfolio", "portfolio review")
+    )
+
+
 def _resolve_symbol(symbol: str) -> str:
+    stripped = symbol.strip()
+    if re.fullmatch(r"[A-Z]{1,6}(?:\.[A-Z]{1,4})?|\d{1,6}(?:\.[A-Z]{1,4})?", stripped):
+        return normalize_symbol(stripped)
     try:
         return resolve_symbol(symbol).symbol
     except Exception:

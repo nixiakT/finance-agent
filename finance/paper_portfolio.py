@@ -47,6 +47,8 @@ class CandidateScore:
     source: str
     thesis: str
     warnings: list[str] = field(default_factory=list)
+    components: dict[str, float] = field(default_factory=dict)
+    verdict: str = ""
 
 
 def account_path(name: str = DEFAULT_ACCOUNT, base_dir: Path | None = None) -> Path:
@@ -122,7 +124,7 @@ def construct_portfolio(
     initial_cash: float = 1_000_000.0,
     max_positions: int = 5,
     max_weight: float = 0.30,
-    min_score: float = 35.0,
+    min_score: float = 40.0,
     cash_reserve: float = 0.10,
     name: str = DEFAULT_ACCOUNT,
     overwrite: bool = True,
@@ -180,7 +182,7 @@ def rebalance_portfolio(
     name: str = DEFAULT_ACCOUNT,
     max_positions: int = 5,
     max_weight: float = 0.30,
-    min_score: float = 35.0,
+    min_score: float = 40.0,
     cash_reserve: float = 0.10,
     base_dir: Path | None = None,
 ) -> tuple[PortfolioAccount, list[CandidateScore]]:
@@ -346,6 +348,72 @@ def render_transactions(account: PortfolioAccount, limit: int = 30) -> str:
     return "\n".join(lines)
 
 
+def render_portfolio_review(account: PortfolioAccount, scores: list[CandidateScore]) -> str:
+    total = portfolio_value(account)
+    score_by_symbol = {score.symbol.upper(): score for score in scores}
+    held_symbols = {holding.symbol.upper() for holding in account.holdings}
+    rows: list[tuple[Holding, CandidateScore | None, float]] = []
+    for holding in account.holdings:
+        pnl_pct = (holding.last_price / holding.avg_cost - 1) * 100 if holding.avg_cost else 0.0
+        rows.append((holding, score_by_symbol.get(holding.symbol.upper()), pnl_pct))
+
+    lines = [
+        f"# 纸面组合诊断：{account.name}",
+        "",
+        f"- 当前净值: {_money(total)}",
+        f"- 现金占比: {(account.cash / total * 100) if total else 0:.2f}%",
+        "- 性质: 只读诊断，不会改仓；真正调整请再执行 `/portfolio rebalance ...` 或 `/portfolio sell ...`。",
+        "",
+        "## 持仓复盘",
+        "| 标的 | 权重 | 持仓收益 | 当前评分 | 诊断 | 主要依据 |",
+        "|---|---:|---:|---:|---|---|",
+    ]
+    for holding, score, pnl_pct in rows:
+        diagnosis = _holding_diagnosis(holding, score, pnl_pct)
+        score_text = f"{score.score:.1f}" if score else "NA"
+        lines.append(
+            f"| {holding.symbol} | {holding.weight * 100:.2f}% | {pnl_pct:.2f}% | "
+            f"{score_text} | {diagnosis} | "
+            f"{_review_basis(score) if score else holding.thesis[:90]} |"
+        )
+
+    ranked = sorted(scores, key=lambda item: item.score, reverse=True)
+    weakest_score = min((score.score for _, score, _ in rows if score), default=0.0)
+    replacements = [
+        score for score in ranked
+        if score.symbol.upper() not in held_symbols and score.score >= max(50.0, weakest_score + 5.0)
+    ][:5]
+    weak_holdings = [
+        (holding, score) for holding, score, pnl_pct in rows
+        if score and (_is_weak_holding(score, pnl_pct) or pnl_pct < -5)
+    ]
+
+    lines.extend(["", "## 替换候选"])
+    if replacements:
+        lines.append("| 候选 | 评分 | 价格 | 诊断 | 依据 | 风险 |")
+        lines.append("|---|---:|---:|---|---|---|")
+        for score in replacements:
+            lines.append(
+                f"| {score.symbol} | {score.score:.1f} | {_money(score.price)} | {score.verdict} | "
+                f"{_review_basis(score)} | {'; '.join(score.warnings[:3]) or '无'} |"
+            )
+    else:
+        lines.append("- 没有明显高于当前弱项的替换候选；先继续跟踪或扩大候选池。")
+
+    lines.extend(["", "## 操作建议"])
+    if weak_holdings and replacements:
+        weak_text = ", ".join(f"{holding.symbol}({score.score:.1f})" for holding, score in weak_holdings)
+        replacement_text = ", ".join(f"{score.symbol}({score.score:.1f})" for score in replacements[:3])
+        lines.append(f"- 可重点比较弱项 {weak_text} 与候选 {replacement_text}。")
+    elif weak_holdings:
+        weak_text = ", ".join(f"{holding.symbol}({score.score:.1f})" for holding, score in weak_holdings)
+        lines.append(f"- {weak_text} 属于弱持仓，但本轮没有足够强的替换候选；先降低置信度或扩大候选池。")
+    else:
+        lines.append("- 当前持仓没有触发明确替换信号；按计划继续每日 mark。")
+    lines.append("- 若要执行纸面调仓，先用 `/portfolio review AAPL MSFT NVDA GOOGL AVGO ...` 扩大候选，再用 `/portfolio rebalance ...`。")
+    return "\n".join(lines)
+
+
 def render_account(account: PortfolioAccount) -> str:
     total = portfolio_value(account)
     pnl = total - account.initial_cash
@@ -392,12 +460,12 @@ def render_account(account: PortfolioAccount) -> str:
 
 def render_recommendation(account: PortfolioAccount, scores: list[CandidateScore]) -> str:
     lines = [render_account(account), "", "## 候选评分"]
-    lines.append("| 排名 | 标的 | 分数 | 目标权重 | 价格 | 数据源 | 关键理由 | 风险提示 |")
-    lines.append("|---:|---|---:|---:|---:|---|---|---|")
+    lines.append("| 排名 | 标的 | 分数 | 目标权重 | 价格 | 诊断 | 分项 | 关键理由 | 风险提示 |")
+    lines.append("|---:|---|---:|---:|---:|---|---|---|---|")
     for index, score in enumerate(scores, start=1):
         lines.append(
             f"| {index} | {score.symbol} | {score.score:.1f} | {score.target_weight * 100:.1f}% | "
-            f"{_money(score.price)} | {score.source or '未知'} | {score.thesis} | "
+            f"{_money(score.price)} | {score.verdict or '未分级'} | {_component_text(score)} | {score.thesis} | "
             f"{'; '.join(score.warnings) or '无'} |"
         )
     lines.extend([
@@ -416,71 +484,125 @@ def _score_snapshot(snapshot: StockSnapshot) -> CandidateScore:
     f = snapshot.financials
     i = snapshot.indicators
     score = 50.0
+    components: dict[str, float] = {"momentum": 0.0, "quality": 0.0, "risk": 0.0, "data": 0.0}
     thesis: list[str] = []
     warnings: list[str] = []
 
+    ret_1m = _num(i.get("return_1m_pct"))
     ret_3m = _num(i.get("return_3m_pct"))
     ret_1y = _num(i.get("return_1y_pct"))
+    price_vs_ma20 = _num(i.get("price_vs_ma20_pct"))
+    price_vs_ma60 = _num(i.get("price_vs_ma60_pct"))
+    macd_hist = _num(i.get("macd_histogram"))
+    rsi = _num(i.get("rsi14"))
     vol = _num(i.get("annualized_volatility_pct"))
     pe = _num(f.pe_ratio or q.pe_ratio)
     roe = _ratio_pct(f.return_on_equity)
     margin = _ratio_pct(f.profit_margin)
 
+    if ret_1m is not None:
+        delta = _clamp(ret_1m * 0.25, -4.0, 5.0)
+        components["momentum"] += delta
+        thesis.append(f"1月收益{ret_1m:.1f}%")
     if ret_3m is not None:
-        delta = _clamp(ret_3m / 2.0, -12.0, 12.0)
-        score += delta
+        delta = _clamp(ret_3m * 0.35, -12.0, 14.0)
+        components["momentum"] += delta
         thesis.append(f"3月收益{ret_3m:.1f}%")
     if ret_1y is not None:
-        delta = _clamp(ret_1y / 6.0, -8.0, 8.0)
-        score += delta
+        delta = _clamp(ret_1y / 8.0, -12.0, 10.0)
+        components["momentum"] += delta
         thesis.append(f"1年收益{ret_1y:.1f}%")
+        if ret_1y < -15:
+            components["momentum"] -= 8
+            warnings.append(f"1年相对弱势 {ret_1y:.1f}%")
+    if ret_3m is not None and ret_1y is not None:
+        if ret_3m > 8 and ret_1y > 15:
+            components["momentum"] += 5
+            thesis.append("相对强度较好")
+        elif ret_3m > 0 and ret_1y < -10:
+            components["momentum"] -= 6
+            warnings.append("短期反弹但中长期相对强度不足")
+    if price_vs_ma20 is not None:
+        if price_vs_ma20 > 2:
+            components["momentum"] += 2
+        elif price_vs_ma20 < -3:
+            components["momentum"] -= 3
+            warnings.append(f"价格低于 MA20 {abs(price_vs_ma20):.1f}%")
+    if price_vs_ma60 is not None:
+        if price_vs_ma60 > 4:
+            components["momentum"] += 3
+        elif price_vs_ma60 < -5:
+            components["momentum"] -= 5
+            warnings.append(f"价格低于 MA60 {abs(price_vs_ma60):.1f}%")
+    if macd_hist is not None:
+        components["momentum"] += 2 if macd_hist > 0 else -2
+    if rsi is not None:
+        if rsi >= 75:
+            components["risk"] -= 4
+            warnings.append(f"RSI 偏热 {rsi:.1f}")
+        elif rsi <= 25:
+            components["risk"] -= 3
+            warnings.append(f"RSI 偏弱 {rsi:.1f}")
     if vol is not None:
         if vol < 25:
-            score += 6
+            components["risk"] += 4
             thesis.append("波动率较低")
+        elif vol > 65:
+            components["risk"] -= 12
+            warnings.append(f"年化波动率过高 {vol:.1f}%")
         elif vol > 55:
-            score -= 12
+            components["risk"] -= 8
             warnings.append(f"年化波动率偏高 {vol:.1f}%")
     if pe is not None:
         if 0 < pe < 25:
-            score += 8
+            components["quality"] += 6
             thesis.append(f"PE {pe:.1f} 不高")
+        elif 25 <= pe <= 45:
+            components["quality"] += 2
         elif pe > 60:
-            score -= 12
+            components["quality"] -= 8
             warnings.append(f"PE 偏高 {pe:.1f}")
     if f.free_cash_flow is not None:
         if f.free_cash_flow > 0:
-            score += 8
+            components["quality"] += 6
             thesis.append("自由现金流为正")
         else:
-            score -= 10
+            components["quality"] -= 8
             warnings.append("自由现金流为负")
     if margin is not None:
         if margin > 20:
-            score += 6
+            components["quality"] += 5
             thesis.append(f"利润率{margin:.1f}%")
+        elif margin > 10:
+            components["quality"] += 2
         elif margin < 5:
-            score -= 5
+            components["quality"] -= 5
             warnings.append(f"利润率偏低 {margin:.1f}%")
     if roe is not None:
-        if roe > 15:
-            score += 6
+        if roe > 20:
+            components["quality"] += 5
+            thesis.append(f"ROE {roe:.1f}%")
+        elif roe > 15:
+            components["quality"] += 3
             thesis.append(f"ROE {roe:.1f}%")
         elif roe < 5:
-            score -= 5
+            components["quality"] -= 5
             warnings.append(f"ROE 偏低 {roe:.1f}%")
 
-    if q.source in {"SAMPLE_FALLBACK", "UNAVAILABLE", ""}:
-        score -= 35
-        warnings.append(f"行情数据源低置信: {q.source or '未知'}")
-    if f.source in {"SAMPLE_FALLBACK", "UNAVAILABLE", ""}:
-        score -= 25
-        warnings.append(f"基本面数据源低置信: {f.source or '未知'}")
+    components["data"] += _source_adjustment(q.source, "行情", warnings)
+    components["data"] += _source_adjustment(f.source, "基本面", warnings)
+    if q.as_of and not q.is_realtime:
+        components["data"] -= 5
+        warnings.append("行情时间可能延迟")
     if q.price is None or q.price <= 0:
-        score -= 50
+        components["data"] -= 50
         warnings.append("缺少有效价格，不能建仓")
 
+    for key in components:
+        components[key] = round(components[key], 2)
+        score += components[key]
     score = _clamp(score, 0.0, 100.0)
+    verdict = _score_verdict(score, warnings)
     return CandidateScore(
         symbol=snapshot.symbol,
         score=score,
@@ -489,7 +611,73 @@ def _score_snapshot(snapshot: StockSnapshot) -> CandidateScore:
         source=f"{q.source}/{f.source}",
         thesis="；".join(thesis[:5]) or "正面证据不足",
         warnings=warnings,
+        components=components,
+        verdict=verdict,
     )
+
+
+def _source_adjustment(source: str, label: str, warnings: list[str]) -> float:
+    if source == "SKIPPED":
+        warnings.append(f"{label}未抓取，诊断置信度下降")
+        return -6
+    if source == "UNAVAILABLE" or source == "":
+        warnings.append(f"{label}数据不可用")
+        return -16 if label == "行情" else -12
+    if source == "SAMPLE_FALLBACK":
+        warnings.append(f"{label}数据源为样例 fallback")
+        return -25 if label == "行情" else -10
+    return 0.0
+
+
+def _score_verdict(score: float, warnings: list[str]) -> str:
+    weak_signal = any("相对弱势" in warning or "中长期相对强度不足" in warning for warning in warnings)
+    if weak_signal:
+        return "相对弱势"
+    if score >= 65 and not weak_signal:
+        return "核心候选"
+    if score >= 52 and not weak_signal:
+        return "可持有/跟踪"
+    if score >= 42:
+        return "边际候选"
+    return "弱候选"
+
+
+def _holding_diagnosis(holding: Holding, score: CandidateScore | None, pnl_pct: float) -> str:
+    if score is None:
+        return "缺少新评分，先核验数据"
+    if _is_weak_holding(score, pnl_pct):
+        return "低置信持仓，优先复核/替换"
+    if score.score >= 60 and pnl_pct >= -3:
+        return "继续持有观察"
+    if pnl_pct < -5:
+        return "跑输明显，设置减仓观察"
+    if score.score < 48:
+        return "边际持仓，等待替代"
+    return "中性持仓"
+
+
+def _is_weak_holding(score: CandidateScore, pnl_pct: float) -> bool:
+    if score.score < 42:
+        return True
+    if score.score < 50 and pnl_pct < 0:
+        return True
+    return any("相对弱势" in warning or "中长期相对强度不足" in warning for warning in score.warnings)
+
+
+def _review_basis(score: CandidateScore | None) -> str:
+    if score is None:
+        return "无评分"
+    pieces = [score.verdict or "未分级", _component_text(score)]
+    if score.thesis:
+        pieces.append(score.thesis[:70])
+    return "；".join(piece for piece in pieces if piece)
+
+
+def _component_text(score: CandidateScore) -> str:
+    if not score.components:
+        return ""
+    order = (("momentum", "动量"), ("quality", "质量"), ("risk", "风险"), ("data", "数据"))
+    return " ".join(f"{label}{score.components.get(key, 0):+.1f}" for key, label in order)
 
 
 def _target_weights(scores: list[CandidateScore], max_weight: float) -> list[float]:

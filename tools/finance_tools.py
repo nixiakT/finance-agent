@@ -107,6 +107,14 @@ def _paper_trades(name: str = "default", limit: int = 30) -> str:
     return _agent.paper_trades(name, limit)
 
 
+def _review_paper_portfolio(
+    symbols: list[str] | str = "",
+    period: str = "6mo",
+    name: str = "default",
+) -> str:
+    return _agent.review_paper_portfolio(symbols, period, name)
+
+
 def _learn_from_history(
     symbol: str,
     period: str = "2y",
@@ -380,6 +388,26 @@ finance_paper_trades_tool = Tool(
     run=_paper_trades,
 )
 
+finance_review_paper_portfolio_tool = Tool(
+    name="finance_review_paper_portfolio",
+    description="只读诊断纸面组合：解释当前持仓质量、相对强弱、数据置信度，并给出替换候选；不会改仓。",
+    parameters={
+        "type": "object",
+        "properties": {
+            "symbols": {
+                "oneOf": [
+                    {"type": "array", "items": {"type": "string"}},
+                    {"type": "string"},
+                ],
+                "description": "可选候选池，如 AAPL MSFT NVDA GOOGL AVGO",
+            },
+            "period": {"type": "string"},
+            "name": {"type": "string"},
+        },
+    },
+    run=_review_paper_portfolio,
+)
+
 finance_learn_from_history_tool = Tool(
     name="finance_learn_from_history",
     description="从股票历史价格中做 walk-forward 可解释学习，生成方向、置信度、保存预测账本，并更新 finance-history-learning Skill。",
@@ -418,5 +446,6 @@ finance_tools = [
     finance_show_paper_portfolio_tool,
     finance_sell_paper_holding_tool,
     finance_paper_trades_tool,
+    finance_review_paper_portfolio_tool,
     finance_learn_from_history_tool,
 ]

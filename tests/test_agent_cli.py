@@ -313,6 +313,7 @@ def test_portfolio_command_builds_and_marks_paper_account(tmp_path: Any, monkeyp
     marked = router.handle("/portfolio mark").output
     sold = router.handle("/portfolio sell AAPL 止盈").output
     trades = router.handle("/portfolio trades").output
+    review = router.handle("/portfolio review AAPL MSFT NVDA GOOGL").output
 
     assert "# 模拟投资账户" in built
     assert "候选评分" in built
@@ -320,6 +321,7 @@ def test_portfolio_command_builds_and_marks_paper_account(tmp_path: Any, monkeyp
     assert "SELL" in sold
     assert "止盈" in sold
     assert "纸面交易流水" in trades
+    assert "纸面组合诊断" in review
 
 
 def test_learn_history_command_updates_skill_and_prediction(tmp_path: Any, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -608,6 +610,31 @@ class PortfolioFinance(StatusFinance):
         from finance.paper_portfolio import load_account, render_transactions
 
         return render_transactions(load_account(name), limit)
+
+    def review_paper_portfolio(
+        self,
+        symbols: list[str] | str | None = None,
+        period: str = "6mo",
+        name: str = "default",
+    ) -> str:
+        from finance.models import Financials, Quote, StockSnapshot, utc_now_iso
+        from finance.paper_portfolio import load_account, render_portfolio_review, score_candidates
+
+        account = load_account(name)
+        candidates = symbols if isinstance(symbols, list) else ["AAPL", "MSFT", "NVDA"]
+        snapshots = [
+            StockSnapshot(
+                symbol=symbol,
+                quote=Quote(symbol=symbol, price=100, source="STATIC", as_of=utc_now_iso(), is_realtime=True),
+                history=[],
+                financials=Financials(symbol=symbol, source="STATIC", as_of=utc_now_iso(), free_cash_flow=1),
+                news=[],
+                indicators={"return_1m_pct": 5, "return_3m_pct": 10, "return_1y_pct": 20, "annualized_volatility_pct": 20},
+                fetched_at=utc_now_iso(),
+            )
+            for symbol in candidates
+        ]
+        return render_portfolio_review(account, score_candidates(snapshots))
 
     def rebalance_paper_portfolio(
         self,
