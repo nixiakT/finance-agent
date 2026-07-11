@@ -57,6 +57,8 @@
 
 Markdown 命令支持 frontmatter `description` / `argument-hint` 和 `$1`、`$2`、`$ARGUMENTS`、`$$` 替换。Skill 与 MCP prompt 展开后都以 user-level 内容进入会话，不具有 system 优先级。
 
+`agent/input.py::SlashCompletionPanel` 移植 Reasonix 的状态机思路：前缀命中优先、子序列模糊命中其次，选中项环形移动，面板固定作为输入框上方的布局行而非默认浮层。它最多绘制 8 个“命令 + 说明”候选，并接管 `↑/↓`、`Tab/Enter`、`Esc` 交互，因此长帮助页把输入框推到终端底部时仍然可见。
+
 `agent/ui.py` 使用实际终端宽度生成欢迎页、精简帮助页和有边界的工具卡片。交互底栏显示 thinking 模式、模型、可用数据源数、Skill 数和 MCP 连接数。`compact` 只输出一行轨迹摘要，`/think on` 展开卡片，`/trace` 重新展示上一轮详情。
 
 ### MCP

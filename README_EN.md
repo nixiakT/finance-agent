@@ -109,7 +109,7 @@ python -m agent.cli "Give the agent 1,000,000 paper cash to invest in AAPL, MSFT
 /sources                     Show data-source priority
 ```
 
-Interactive input uses `prompt_toolkit`, with history, cursor movement, Ctrl+A/E/U/K, and fuzzy slash-command completion. One catalog drives help and built-in completion, then runtime discovery merges Markdown custom commands, Skills, and MCP prompts. A persistent bottom bar shows thinking mode, model, available data sources, Skill count, and MCP connection count. The CLI also cleans accidentally pasted `finance-agent >` prefixes.
+Interactive input uses `prompt_toolkit`, with history, cursor movement, Ctrl+A/E/U/K, and fuzzy slash-command completion. Typing `/` or a command prefix pins up to eight matching commands and descriptions above the input; use `Up/Down` to move, `Tab/Enter` to accept, and `Esc` to close. One catalog drives help and built-in completion, then runtime discovery merges Markdown custom commands, Skills, and MCP prompts. A persistent bottom bar shows thinking mode, model, available data sources, Skill count, and MCP connection count. The CLI also cleans accidentally pasted `finance-agent >` prefixes.
 
 By default, the CLI displays a high-level `thinking` trace in `compact` mode. Tool details use width-bounded cards: `/think on` expands them live, `compact` shows only tool count, elapsed time, and names, `/trace` reopens the previous details, and `/think off` hides the trace. This is an auditable execution summary, not hidden chain-of-thought.
 

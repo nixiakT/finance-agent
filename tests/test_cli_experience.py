@@ -1,11 +1,21 @@
 from __future__ import annotations
 
+import asyncio
+import io
+
 import pytest
 
 from agent.command_catalog import CompletionItem, command_completions, command_specs, completion_meta
 from agent.custom_commands import load_custom_commands
 from agent.dynamic_commands import DynamicSlashCommands
-from agent.input import InteractiveInput
+from agent.input import (
+    MAX_COMPLETION_ROWS,
+    InteractiveInput,
+    SlashCompletionItem,
+    SlashCompletionPanel,
+    _cell_width,
+    _sanitize_hint,
+)
 from agent.ui import _display_width, render_help, render_status_bar, render_tool_card, render_welcome
 
 
@@ -26,6 +36,147 @@ def test_interactive_input_uses_catalog_by_default(monkeypatch) -> None:  # noqa
     reader = InteractiveInput("finance-agent > ")
 
     assert reader.commands == command_completions()
+
+
+def test_reasonix_style_completion_ranks_prefix_first_and_windows_eight_rows() -> None:
+    rows = [
+        SlashCompletionItem("/think", "current mode"),
+        SlashCompletionItem("/think compact", "compact mode"),
+        SlashCompletionItem("/fetch", "fuzzy subsequence match"),
+        *[SlashCompletionItem(f"/command-{index}") for index in range(10)],
+    ]
+    panel = SlashCompletionPanel(lambda: rows)
+
+    panel.update("/th")
+
+    assert [item.label for item in panel.items[:3]] == ["/think", "/think compact", "/fetch"]
+    panel.update("/")
+    assert len(panel.visible_items()) == MAX_COMPLETION_ROWS
+    panel.move(-1)
+    assert panel.selected == len(rows) - 1
+    assert len(panel.visible_items()) == MAX_COMPLETION_ROWS
+
+
+def test_completion_panel_is_safe_and_bounded_in_a_narrow_cjk_terminal() -> None:
+    raw_hint = "[skill] 第一行\n第二行\a 不应响铃\u200b"
+    panel = SlashCompletionPanel(
+        lambda: [
+            SlashCompletionItem(
+                "/研究-report AAPL",
+                raw_hint,
+            )
+        ]
+    )
+    panel.update("/")
+
+    rendered = "".join(text for _, text in panel.render(24))
+    lines = rendered.splitlines()
+
+    assert "\a" not in rendered
+    assert "\u200b" not in rendered
+    assert _sanitize_hint(raw_hint.removeprefix("[skill] ")) == "第一行 第二行 不应响铃"
+    assert all(_cell_width(line) == 24 for line in lines)
+
+
+def test_reasonix_style_completion_is_rendered_and_keyboard_driven(tmp_path) -> None:  # noqa: ANN001
+    from prompt_toolkit.data_structures import Size
+    from prompt_toolkit.input import create_pipe_input
+    from prompt_toolkit.output import ColorDepth
+    from prompt_toolkit.output.vt100 import Vt100_Output
+
+    async def scenario() -> None:
+        rendered = io.StringIO()
+        with create_pipe_input() as pipe_input:
+            output = Vt100_Output(
+                rendered,
+                get_size=lambda: Size(rows=30, columns=120),
+                term="xterm-256color",
+                default_color_depth=ColorDepth.DEPTH_8_BIT,
+                enable_cpr=False,
+            )
+            reader = InteractiveInput(
+                "finance-agent > ",
+                input_stream=pipe_input,
+                output_stream=output,
+                history_path=tmp_path / "history",
+                bottom_toolbar=lambda: "compact · deepseek-chat",
+            )
+            assert reader._session is not None
+            reader._session.app.ttimeoutlen = 0.05
+            task = asyncio.create_task(reader._session.prompt_async())
+
+            pipe_input.send_text("/th")
+            await asyncio.sleep(0.15)
+
+            transcript = rendered.getvalue()
+            assert reader._panel.active
+            assert "/think compact" in transcript
+            assert "折叠执行轨迹" in transcript
+            assert "Tab/Enter 选中" in transcript
+
+            pipe_input.send_text("\x1b")
+            await asyncio.sleep(0.1)
+            assert not reader._panel.active
+            assert reader._session.default_buffer.text == "/th"
+
+            pipe_input.send_text("\x15/th")
+            await asyncio.sleep(0.15)
+            pipe_input.send_text("\x1b[B\x1b[B\t")
+            await asyncio.sleep(0.15)
+            assert reader._session.default_buffer.text == "/think compact"
+            assert not reader._panel.active
+
+            pipe_input.send_text("\r")
+            assert await asyncio.wait_for(task, timeout=1) == "/think compact"
+
+    asyncio.run(scenario())
+
+
+def test_completion_keeps_history_navigation_and_refreshes_once_per_slash_entry(tmp_path) -> None:  # noqa: ANN001
+    from prompt_toolkit.input import create_pipe_input
+    from prompt_toolkit.output import DummyOutput
+
+    refresh_calls = 0
+
+    def refresh() -> tuple[list[str], dict[str, str]]:
+        nonlocal refresh_calls
+        refresh_calls += 1
+        return command_completions(), completion_meta()
+
+    async def scenario() -> None:
+        with create_pipe_input() as pipe_input:
+            reader = InteractiveInput(
+                "finance-agent > ",
+                completion_refresh=refresh,
+                input_stream=pipe_input,
+                output_stream=DummyOutput(),
+                history_path=tmp_path / "history-navigation",
+            )
+            assert reader._session is not None
+            reader._session.history.append_string("/help")
+            reader._session.history.append_string("/status")
+            task = asyncio.create_task(reader._session.prompt_async())
+            await asyncio.sleep(0.05)
+
+            pipe_input.send_text("\x1b[A")
+            await asyncio.sleep(0.05)
+            assert reader._session.default_buffer.text == "/status"
+            assert reader._panel.active
+
+            pipe_input.send_text("\x1b[A")
+            await asyncio.sleep(0.05)
+            assert reader._session.default_buffer.text == "/help"
+            pipe_input.send_text("\x1b[B")
+            await asyncio.sleep(0.05)
+            assert reader._session.default_buffer.text == "/status"
+
+            pipe_input.send_text("\x15/exit")
+            await asyncio.sleep(0.1)
+            pipe_input.send_text("\r")
+            assert await asyncio.wait_for(task, timeout=1) == "/exit"
+
+    asyncio.run(scenario())
+    assert refresh_calls == 2
 
 
 def test_welcome_adapts_to_small_and_large_terminals(monkeypatch) -> None:  # noqa: ANN001
