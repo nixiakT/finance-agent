@@ -9,8 +9,8 @@ Command-line stock research assistant for quotes, fundamentals, news verificatio
 - Quotes: price, change, volume, market cap, data source, and timestamp.
 - Symbol resolution: company names, Chinese names, English names, aliases, or tickers to A-share, Hong Kong, and US candidates.
 - History and indicators: MA5 / MA20 / MA60, RSI14, MACD, volatility, 1-month / 3-month / 1-year returns.
-- Fundamentals: PE, EPS, revenue, profit, cash flow, ROE, margin, and explicit missing-data notes.
-- News and web verification: search public pages or fetch URLs to verify codes, listing status, and sources.
+- Fundamentals: real-source lookup through Tushare, AKShare, Yahoo, and optional providers for PE, EPS, revenue, profit, cash flow, ROE, and margin. Empty results fall through to the next provider; unresolved gaps stay explicit.
+- News and web verification: news is filtered by ticker/company-specific terms. An upstream failure is reported as a data failure, never converted into a fake news item.
 - Structured reports: price, trend, fundamentals, technicals, news, risks, and research conclusion.
 - Research quality gate: information richness, data gaps, reject/recheck signals, and next verification steps.
 - Investment frameworks: Buffett/Munger, Duan Yongping, Li Lu, and Dalio.
@@ -23,14 +23,19 @@ Command-line stock research assistant for quotes, fundamentals, news verificatio
 - WeChat delivery and scheduling: dry-run outbox, WeCom webhook, local relay, and scheduled local brief jobs.
 - Trace2Skill: turn successful task traces into project skills.
 - General agent tools: read/write/bash/edit/grep/glob/task_list for live coding tasks.
-- MCP: minimal stdio client with an echo server; MCP tools are exposed with the `mcp__` prefix.
+- Dynamic CLI: built-ins, Markdown custom commands, project Skills, and MCP prompts share one fuzzy-completion menu. The welcome screen, help, status bar, and tool cards adapt to terminal width.
+- MCP: `.mcp.json` can connect multiple stdio servers. Tools use `mcp__<server>__<tool>` names, with bounded timeouts, status reporting, and process cleanup.
+- Skills: the system layer exposes only validated Skill names. Descriptions stay in `/skills` and completion metadata; `read_skill` loads the body on demand as lower-priority context.
 - Safety layer: workspace permissions, dangerous command blocking, secret-write blocking, and untrusted-content isolation.
 
 ## Quick Start
 
-```bash
-pip install -r requirements.txt
+The repository includes `environment.yml`. Create or update the `openclaw` environment:
 
+```bash
+conda env create -f environment.yml        # first setup
+# conda env update -n openclaw -f environment.yml --prune  # existing environment
+conda activate openclaw
 python -m agent.cli --selfcheck
 python -m agent.cli
 ```
@@ -79,7 +84,8 @@ python -m agent.cli "Give the agent 1,000,000 paper cash to invest in AAPL, MSFT
                               Create a paper portfolio, inspect holdings, review replacements, mark daily NAV, simulate sells, view trades, daily PnL, and rebalance
 /schedule list/brief/portfolio/run
                               Create scheduled WeChat briefs or portfolio marks, or execute due jobs
-/mcp                         Show registered MCP tools
+/skills                      List project Skills available for on-demand loading
+/mcp                         Show MCP server status, tools, and prompt commands
 /security                    Show permission and injection-protection policy
 /resolve minimax             Resolve a company name or alias to A/HK/US ticker candidates
 /quote AAPL                  Get quote
@@ -103,9 +109,40 @@ python -m agent.cli "Give the agent 1,000,000 paper cash to invest in AAPL, MSFT
 /sources                     Show data-source priority
 ```
 
-Interactive input uses `prompt_toolkit`, with history, cursor movement, deletion, Ctrl+A/E/U/K, and slash-command completion. The CLI also cleans accidentally pasted `finance-agent >` prefixes.
+Interactive input uses `prompt_toolkit`, with history, cursor movement, Ctrl+A/E/U/K, and fuzzy slash-command completion. One catalog drives help and built-in completion, then runtime discovery merges Markdown custom commands, Skills, and MCP prompts. A persistent bottom bar shows thinking mode, model, available data sources, Skill count, and MCP connection count. The CLI also cleans accidentally pasted `finance-agent >` prefixes.
 
-By default, the CLI displays a Claude Code-style high-level `thinking` trace in `compact` mode. It shows a one-line summary with tool count, elapsed time, and tool names while keeping the final answer separate. Use `/think on` for expanded details, `/trace` in interactive mode to expand the previous trace, or `/think off` for quieter output. This is an auditable execution summary, not hidden chain-of-thought.
+By default, the CLI displays a high-level `thinking` trace in `compact` mode. Tool details use width-bounded cards: `/think on` expands them live, `compact` shows only tool count, elapsed time, and names, `/trace` reopens the previous details, and `/think off` hides the trace. This is an auditable execution summary, not hidden chain-of-thought.
+
+## Custom Commands, Skills, And MCP
+
+Place Markdown commands in project-local `.finance_agent/commands/` or user-level `~/.finance-agent/commands/`. The relative file path becomes the slash command. Project commands override user commands with the same name, but built-ins remain reserved. Templates support `$1`, `$2`, `$ARGUMENTS`, and `$$`:
+
+```markdown
+---
+description: Review disconfirming evidence for a stock
+argument-hint: <ticker> <period>
+---
+Review counter-evidence and risks for $1 over $2. Full input: $ARGUMENTS
+```
+
+`/skills` lists `skills/*/SKILL.md`. The model can call the read-only `read_skill` tool by name, or you can invoke a Skill directly as `/<skill-name> ...`. Prompts declared by MCP servers appear in the same completion menu as `/mcp:<server>:<prompt>`.
+
+Configure multiple stdio servers in the project-root `.mcp.json`:
+
+```json
+{
+  "mcpServers": {
+    "research": {
+      "command": "python",
+      "args": ["-m", "your_mcp_server"],
+      "cwd": ".",
+      "timeoutSeconds": 10
+    }
+  }
+}
+```
+
+One broken server does not hide healthy servers. `/mcp` reports each server's status, errors, tools, and prompts. Managed MCP subprocesses close when an interactive or one-shot run exits. If `.mcp.json` is absent, the built-in echo server remains available as a local example.
 
 ## Proxy And Language
 
@@ -218,7 +255,7 @@ FINANCE_WECHAT_MODE=dry-run
 
 ## Data Sources
 
-Provider priority:
+Provider order:
 
 1. Alpha Vantage, requires `ALPHAVANTAGE_API_KEY`
 2. Tushare, requires `TUSHARE_TOKEN`, mainly for A-shares
@@ -231,6 +268,12 @@ Provider priority:
 ```bash
 FINANCE_ALLOW_SAMPLE_FALLBACK=0
 ```
+
+Applicable real providers run concurrently under one deadline per operation and one total snapshot deadline. Timed-out providers are reported and temporarily circuit-broken instead of blocking successful fallbacks. Configure `FINANCE_PROVIDER_TIMEOUT_SECONDS`, `FINANCE_SNAPSHOT_TIMEOUT_SECONDS`, and `FINANCE_PROVIDER_COOLDOWN_SECONDS`; defaults are 25, 45, and 60 seconds.
+
+Quote lookup checks every applicable real provider, prefers the freshest real-time result, and reports the maximum price spread. Historical candles also query every applicable real provider using unadjusted closes, select the freshest/most complete series, and report overlap-window spread. Fundamentals fill missing fields only when currency, report date, and period basis are compatible, and report overlapping-field differences. News aggregates all applicable real providers, filters relevance, deduplicates across sources, and diversifies sources before applying the limit; only events from the last 180 days count as recent quality coverage. AKShare maps public financial indicators for A-share, Hong Kong, and US symbols. Sample fallback never counts as real-source coverage or cross-validation.
+
+Yahoo news first requests a larger candidate set, then filters on the ticker, provider query code, and distinctive company-name terms. Generic words such as `technology`, `group`, and `inc` cannot cause a match by themselves. No strong match is reported as empty/filtered; transport or provider failures are reported separately.
 
 Hong Kong symbols distinguish display codes and provider query codes. For example, public pages may show `Zhipu(02513)`, while Yahoo Finance uses `2513.HK`; MiniMax may be displayed as `00100.HK`, while Yahoo uses `0100.HK`. Reports preserve the display code and explain provider query differences.
 
@@ -252,6 +295,8 @@ python -m agent.cli "Analyze recent SpaceX developments"
 - Backtests exclude slippage, fees, taxes, dividend adjustments, and real execution constraints.
 - Free data sources may be delayed, rate-limited, or missing fields.
 - When a page has WAF or JavaScript challenges, the tool reports the limitation instead of pretending to read the full content.
+- Repeating "this stock will rise," asking to omit risks, or claiming insider information adds no evidence and does not raise confidence.
+- Deterministic finance answers are recorded in the same interactive session, so follow-ups such as "what about it?" retain context. Compacted history is low-trust data and is never promoted to a system instruction.
 
 ## License
 
@@ -260,10 +305,18 @@ MIT. See [LICENSE](LICENSE).
 ## Development Checks
 
 ```bash
-python -m compileall agent backend finance mcp skills tools trace2skill wechat scheduler tests
+python -m compileall agent backend eval finance mcp skills tools trace2skill wechat scheduler tests
 python -m agent.cli --selfcheck
 python -m pytest
+
+# Five-stock real-source check with demo fallback disabled
+FINANCE_ALLOW_SAMPLE_FALLBACK=0 python -m agent.cli /compare AAPL 600519.SS 0700.HK 02513.HK SPCX 1y
+
+# Three-round bullish/insider-pressure evaluation; requires DEEPSEEK_API_KEY and spends three calls
+FINANCE_RUN_LIVE_EVAL=1 python -m pytest tests/test_live_injection_eval.py -q
 ```
+
+Regular `pytest` skips the live model evaluation. It runs only when `FINANCE_RUN_LIVE_EVAL=1` is set explicitly.
 
 Technical design: [docs/TECHNICAL_DESIGN.md](docs/TECHNICAL_DESIGN.md). Ablation report: [docs/ABLATION_REPORT.md](docs/ABLATION_REPORT.md).
 

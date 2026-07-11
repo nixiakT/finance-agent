@@ -45,8 +45,17 @@ def resolve_symbol(query: str) -> SymbolCandidate:
     ]
     if not candidates:
         raise LookupError(f"无法解析标的：{cleaned}")
-
-    return _rank_candidates(cleaned, candidates)[0]
+    ranked = _rank_candidates(cleaned, candidates)
+    if not ranked or _lexical_relevance(cleaned, ranked[0]) < 40:
+        raise LookupError(f"无法可靠解析标的：{cleaned}；请提供 ticker 或用 /resolve 查看候选")
+    if len(ranked) > 1:
+        first_score = _lexical_relevance(cleaned, ranked[0])
+        second_score = _lexical_relevance(cleaned, ranked[1])
+        if ranked[0].symbol != ranked[1].symbol and first_score - second_score < 10:
+            raise LookupError(
+                f"标的解析存在歧义：{cleaned}；请用 /resolve 查看候选并明确 ticker"
+            )
+    return ranked[0]
 
 
 def resolve_symbol_text(query: str, limit: int = 8) -> str:
@@ -250,11 +259,20 @@ def _web_candidates(query: str) -> list[SymbolCandidate]:
     ]
     cleaned_text = _clean_html(text)
     for pattern in patterns:
-        for match in re.finditer(pattern, text):
+        for match in re.finditer(pattern, cleaned_text):
+            if not _context_supports_query(cleaned_text, match.start(), match.end(), query):
+                continue
             symbol = normalize_symbol(match.group(1) + ".HK" if "HK" in pattern else match.group(1))
-            rows.append(SymbolCandidate(symbol=symbol, source="web search", market=_market(symbol)))
+            rows.append(SymbolCandidate(symbol=symbol, name=query, source="web search", market=_market(symbol)))
     for match in re.finditer(r"(?:港股|股票代码|代码|HK)[:：\s]*0?(\d{4,5})", cleaned_text, flags=re.IGNORECASE):
-        rows.append(SymbolCandidate(symbol=normalize_symbol(f"{match.group(1)}.HK"), source="web search", market="HK"))
+        if not _context_supports_query(cleaned_text, match.start(), match.end(), query):
+            continue
+        rows.append(SymbolCandidate(
+            symbol=normalize_symbol(f"{match.group(1)}.HK"),
+            name=query,
+            source="web search",
+            market="HK",
+        ))
     return rows
 
 
@@ -265,25 +283,18 @@ def _clean_html(value: str) -> str:
     return re.sub(r"\s+", " ", text)
 
 
-def _rank_candidates(query: str, candidates: list[SymbolCandidate]) -> list[SymbolCandidate]:
-    query_lower = query.lower()
+def _context_supports_query(text: str, start: int, end: int, query: str, radius: int = 180) -> bool:
+    """Require a web ticker hit to appear in the same snippet as the requested company."""
+    query_key = re.sub(r"\s+", " ", query.strip().lower())
+    if not query_key:
+        return False
+    context = text[max(0, start - radius): min(len(text), end + radius)].lower()
+    return query_key in context
 
+
+def _rank_candidates(query: str, candidates: list[SymbolCandidate]) -> list[SymbolCandidate]:
     def score(candidate: SymbolCandidate) -> tuple[int, str]:
-        value = 0
-        symbol_lower = candidate.symbol.lower()
-        name_lower = candidate.name.lower()
-        if symbol_lower == query_lower:
-            value += 100
-        if name_lower == query_lower:
-            value += 90
-        if query_lower in name_lower:
-            value += 70
-        if query_lower in symbol_lower:
-            value += 60
-        if name_lower.startswith(query_lower):
-            value += 20
-        if query_lower in name_lower and any(token in name_lower for token in (" inc", " corporation", " corp", " limited", " group")):
-            value += 15
+        value = _lexical_relevance(query, candidate)
         if len(candidate.symbol) <= 5 and "." not in candidate.symbol:
             value += 8
         if candidate.symbol.endswith((".HK", ".SS", ".SZ")):
@@ -298,9 +309,33 @@ def _rank_candidates(query: str, candidates: list[SymbolCandidate]) -> list[Symb
             value += 10
         if candidate.source == "AKShare spot":
             value += 10
+        if candidate.source == "local alias":
+            value += 200
         return (-value, candidate.symbol)
 
     return sorted(_dedupe(candidates), key=score)
+
+
+def _lexical_relevance(query: str, candidate: SymbolCandidate) -> int:
+    query_lower = query.strip().lower()
+    symbol_lower = candidate.symbol.lower()
+    name_lower = candidate.name.lower()
+    value = 0
+    if symbol_lower == query_lower:
+        value += 100
+    if name_lower == query_lower:
+        value += 90
+    if query_lower and query_lower in name_lower:
+        value += 70
+    if query_lower and query_lower in symbol_lower:
+        value += 60
+    if query_lower and name_lower.startswith(query_lower):
+        value += 20
+    if query_lower in name_lower and any(token in name_lower for token in (" inc", " corporation", " corp", " limited", " group")):
+        value += 15
+    if candidate.source == "local alias":
+        value += 200
+    return value
 
 
 def _dedupe(candidates: list[SymbolCandidate]) -> list[SymbolCandidate]:
@@ -308,10 +343,13 @@ def _dedupe(candidates: list[SymbolCandidate]) -> list[SymbolCandidate]:
     seen: set[str] = set()
     for candidate in candidates:
         symbol = normalize_symbol(candidate.symbol)
-        if not symbol or symbol in seen:
+        key = symbol
+        if symbol.endswith(".HK") and symbol[:-3].isdigit():
+            key = f"{int(symbol[:-3])}.HK"
+        if not symbol or key in seen:
             continue
         rows.append(SymbolCandidate(symbol, candidate.name, candidate.market or _market(symbol), candidate.source))
-        seen.add(symbol)
+        seen.add(key)
     return rows
 
 

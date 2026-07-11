@@ -192,7 +192,7 @@ finance_get_news_tool = Tool(
     description="获取股票相关新闻摘要和链接。",
     parameters={
         "type": "object",
-        "properties": {"symbol": {"type": "string"}, "limit": {"type": "integer"}},
+        "properties": {"symbol": {"type": "string"}, "limit": {"type": "integer", "minimum": 0}},
         "required": ["symbol"],
     },
     run=_get_news,

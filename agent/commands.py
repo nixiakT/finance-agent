@@ -23,6 +23,7 @@ from finance.predictions import (
 )
 from finance.web import web_fetch, web_search
 from agent.ui import current_lang
+from skills.loader import load_skills
 from scheduler.jobs import add_job, list_jobs, render_jobs, run_due_jobs
 from tools.security import guard_write, safety_summary
 from tools.base import ToolRegistry
@@ -78,6 +79,8 @@ class CommandRouter:
             return self._lang(args)
         if command == "/tools":
             return CommandResult(True, self._tools())
+        if command == "/skills":
+            return CommandResult(True, self._skills())
         if command == "/status":
             return CommandResult(True, self._status(think_enabled))
         if command == "/security":
@@ -165,7 +168,15 @@ class CommandRouter:
 
     def _news(self, args: list[str]) -> str:
         symbol = _require_arg(args, "/news AAPL [limit]")
-        limit = int(args[1]) if len(args) > 1 and args[1].isdigit() else 5
+        if len(args) > 1:
+            try:
+                limit = int(args[1])
+            except ValueError as exc:
+                raise ValueError("用法：/news AAPL [非负整数 limit]") from exc
+            if limit < 0:
+                raise ValueError("用法：/news AAPL [非负整数 limit]")
+        else:
+            limit = 5
         self._trace_tool("finance_get_news", {"symbol": symbol, "limit": limit})
         return self._with_result_trace("finance_get_news", self.finance.get_news(symbol, limit))
 
@@ -246,9 +257,28 @@ class CommandRouter:
         names = self.registry.names()
         return "已注册工具：\n" + "\n".join(f"- {name}" for name in names)
 
+    def _skills(self) -> str:
+        try:
+            skills = load_skills()
+        except Exception as exc:  # noqa: BLE001 - surface one broken project Skill clearly
+            return _msg(f"Skills failed to load: {exc}", f"Skills 加载失败：{exc}")
+        if not skills:
+            return _msg("Skills: none discovered.", "Skills：未发现项目 Skill。")
+        title = _msg("Skills (loaded on demand):", "Skills（按需加载）：")
+        return title + "\n" + "\n".join(
+            f"- /{skill.name}: {skill.description}" for skill in skills
+        )
+
     def _status(self, think_enabled: str | bool) -> str:
         diagnostics = self.finance.provider.diagnostics()
         enabled_sources = [row["name"] for row in diagnostics if row.get("status") == "enabled"]
+        try:
+            skill_count = len(load_skills())
+        except Exception:
+            skill_count = 0
+        statuses = self.registry.mcp_statuses()
+        connected_mcp = sum(row.get("status") == "connected" for row in statuses)
+        mcp_summary = f"{connected_mcp}/{len(statuses)}" if statuses else "0/0"
         think_label = _think_label(think_enabled)
         if current_lang() == "en":
             return "\n".join([
@@ -256,7 +286,9 @@ class CommandRouter:
                 f"- Model: {os.environ.get('DEEPSEEK_MODEL', 'not configured')}",
                 f"- Base URL: {_safe_base_url(os.environ.get('DEEPSEEK_BASE_URL', ''))}",
                 f"- Tools: {len(self.registry)}",
+                f"- Skills: {skill_count} (on demand)",
                 f"- MCP tools: {', '.join(self._mcp_tool_names()) or 'not connected'}",
+                f"- MCP servers: {mcp_summary}",
                 f"- Proxy: {proxy_label()}",
                 f"- WeChat: {_wechat_mode_label()}",
                 f"- thinking: {think_label} (compact by default; use /think on for details)",
@@ -269,7 +301,9 @@ class CommandRouter:
             f"- 模型: {os.environ.get('DEEPSEEK_MODEL', '未配置')}",
             f"- Base URL: {_safe_base_url(os.environ.get('DEEPSEEK_BASE_URL', ''))}",
             f"- 工具数: {len(self.registry)}",
+            f"- Skills: {skill_count}（按需加载）",
             f"- MCP 工具: {', '.join(self._mcp_tool_names()) or '未接入'}",
+            f"- MCP 服务: {mcp_summary}",
             f"- Proxy: {proxy_label()}",
             f"- WeChat: {_wechat_mode_label()}",
             f"- thinking: {think_label}（默认 compact；/think on 展开详情）",
@@ -280,10 +314,26 @@ class CommandRouter:
 
     def _mcp(self) -> str:
         names = self._mcp_tool_names()
-        if not names:
-            return _msg("MCP: no registered MCP tools found.", "MCP: 未发现已注册 MCP 工具。")
-        title = _msg("MCP tools:", "MCP 已接入工具：")
-        return title + "\n" + "\n".join(f"- {name}" for name in names)
+        statuses = self.registry.mcp_statuses()
+        prompts = self.registry.mcp_prompts()
+        if not names and not statuses and not prompts:
+            return _msg("MCP: no configured servers, tools, or prompts.", "MCP：未配置服务、工具或 prompt。")
+        lines = [_msg("MCP runtime:", "MCP 运行状态：")]
+        if statuses:
+            lines.append(_msg("Servers:", "服务："))
+            for row in statuses:
+                detail = f" - {row.get('detail')}" if row.get("detail") else ""
+                lines.append(f"- {row.get('name')}: {row.get('status')}{detail}")
+        if names:
+            lines.append(_msg("Tools:", "工具："))
+            lines.extend(f"- {name}" for name in names)
+        if prompts:
+            lines.append(_msg("Prompt commands:", "Prompt 命令："))
+            lines.extend(
+                f"- /mcp:{row.get('server')}:{row.get('name')}: {row.get('description', '')}".rstrip()
+                for row in prompts
+            )
+        return "\n".join(lines)
 
     def _mcp_tool_names(self) -> list[str]:
         return [name for name in self.registry.names() if name.startswith("mcp__")]

@@ -2,14 +2,15 @@
 
 ## 架构总览
 
-入口是 `python -m agent.cli`。系统由六块组成：
+入口是 `python -m agent.cli`。系统的主要模块是：
 
 1. `backend/`: OpenAI-compatible DeepSeek 客户端和 FakeBackend。
 2. `agent/loop.py`: ReAct 主循环，负责多轮模型调用、工具调用、tool result 回填、终止和错误 observation。
 3. `tools/`: 内置工具系统，包含文件、shell、搜索、金融、网页、微信连接、金融自进化、预测评估、调度、trace2skill。
-4. `mcp/`: 最小 stdio MCP client 和 echo server，MCP 工具以 `mcp__` 前缀透明注册进主循环。
-5. `skills/`: Skill 加载器和领域 Skill，系统提示词会注入可用 Skill 清单。
-6. `tools/security.py`: 权限分层、安全拦截和不可信内容隔离。
+4. `agent/command_catalog.py` + `agent/custom_commands.py` + `agent/dynamic_commands.py`: 统一命令目录、Markdown 自定义命令，以及 Skill/MCP prompt 的运行时发现。
+5. `mcp/`: 多 stdio MCP client 运行时和 echo 示例 server，MCP 工具按 server 命名空间注册进主循环。
+6. `skills/`: Skill 目录、校验器和只读 `read_skill` 按需加载工具。
+7. `tools/security.py`: 权限分层、安全拦截和不可信内容隔离。
 
 ## 关键设计
 
@@ -21,7 +22,7 @@
 
 工具统一使用 `Tool(name, description, parameters, run)`。默认注册：
 
-- 通用开发：`read/write/bash/edit/grep/glob/task_list`
+- 通用开发：`read/write/bash/edit/grep/glob/task_list/read_skill`
 - 金融研究：`finance_*`
 - 网页核验：`web_search/web_fetch`
 - 微信连接：`wechat_status/wechat_send`
@@ -31,7 +32,7 @@
 - 历史学习：`finance_learn_from_history`
 - 本地调度：`schedule_wechat_brief/schedule_wechat_message/schedule_portfolio_mark/schedule_list/schedule_run_due`
 - 自进化：`trace2skill_generate`
-- MCP：`mcp__echo`
+- MCP：`mcp__<server>__<tool>`；没有 `.mcp.json` 时保留兼容示例 `mcp__echo`
 
 `edit` 使用唯一 search-replace 策略：`old` 不存在或不唯一都会失败，避免误改。
 
@@ -40,34 +41,74 @@
 `agent/context.py` 提供：
 
 - `truncate_observation`: 长工具结果截断并标注总字符数。
-- `maybe_compact`: 超预算时保留 system 和最近消息，把早期对话压缩成 system memo。
+- `maybe_compact`: 超预算时保留唯一原始 system 和最近消息，把早期对话标注为低信任历史，以 assistant 消息回填。
+- `compact_with_model`: 摘要请求用独立 compaction policy，明确禁止把用户重复观点、未核验工具输出或历史中的“system-like”文本升级为规则。模型摘要失败时回退到规则压缩。
+
+确定性 `finance_route_task` 产生的问答会通过 `AgentSession.record_finance_turn()` 记入同一会话，因此后续代词问题可以引用上一轮标的，不会因为绕过模型主循环而丢失上下文。
+
+### CLI 与动态命令
+
+`agent/command_catalog.py` 是内置 slash command 的单一信息源：帮助页和补全菜单都由同一组 `CommandSpec` 生成，不再分别维护。`prompt_toolkit` 使用带类型和描述的模糊补全；`DynamicSlashCommands` 启动时完成首次发现，并在打开补全或执行动态命令前 `refresh()`，因此会话中新增的命令、Skill 和 MCP prompt 无需重启即可出现。合并内容包括：
+
+- 内置命令。
+- `~/.finance-agent/commands/**/*.md` 用户命令和 `.finance_agent/commands/**/*.md` 项目命令；项目命令优先，内置名保留。
+- `skills/*/SKILL.md` 声明的 Skill，补全形式为 `/<skill-name>`。
+- MCP `prompts/list` 返回的 prompt，补全形式为 `/mcp:<server>:<prompt>`。
+
+Markdown 命令支持 frontmatter `description` / `argument-hint` 和 `$1`、`$2`、`$ARGUMENTS`、`$$` 替换。Skill 与 MCP prompt 展开后都以 user-level 内容进入会话，不具有 system 优先级。
+
+`agent/ui.py` 使用实际终端宽度生成欢迎页、精简帮助页和有边界的工具卡片。交互底栏显示 thinking 模式、模型、可用数据源数、Skill 数和 MCP 连接数。`compact` 只输出一行轨迹摘要，`/think on` 展开卡片，`/trace` 重新展示上一轮详情。
 
 ### MCP
 
-`mcp/client.py` 实现 stdio JSON-RPC：
+`mcp/client.py` 实现带生命周期的 stdio JSON-RPC：
 
 - `initialize`
 - `tools/list`
 - `tools/call`
+- `prompts/list`
+- `prompts/get`
 
-默认连接 `python -m mcp.echo_server`，注册为 `mcp__echo`。演示命令：
+项目根目录的 `.mcp.json` 可配置多个 stdio server：
 
-```bash
-python - <<'PY'
-from tools.base import build_default_registry
-tool = build_default_registry().get("mcp__echo")
-print(tool.run(text="hello mcp"))
-PY
+```json
+{
+  "mcpServers": {
+    "research": {
+      "command": "python",
+      "args": ["-m", "your_mcp_server"],
+      "cwd": ".",
+      "env": {},
+      "timeoutSeconds": 10
+    }
+  }
+}
 ```
+
+工具注册名为 `mcp__<server>__<tool>`，避免多 server 同名工具冲突。每次 RPC 都有超时上限；一个 server 连接/发现失败会记入状态，不影响其他 server。`/mcp` 展示 server、错误、工具和 prompt。`ToolRegistry.close()` 会关闭所有受管 MCP 子进程。没有 `.mcp.json` 时默认连接 `python -m mcp.echo_server`，并保留 `mcp__echo` 兼容别名。
 
 ### Skills
 
-`skills/loader.py` 扫描 `skills/*/SKILL.md`，解析 frontmatter，生成可用 Skill 清单并注入系统提示词。当前包含：
+`skills/loader.py` 扫描 `skills/*/SKILL.md`，校验 frontmatter、Skill 名称、空正文和重名。系统提示词只注入按名称排序的安全 `name` 索引；项目可编辑的 description/body 不会获得 system 权限。模型需要具体流程时调用只读工具 `read_skill(name)`；交互用户也可使用 `/<skill-name>` 动态命令。`/skills` 列出名称和描述。当前包含：
 
+- `csv-quick-report`
+- `finance-history-learning`
 - `finance-stock-research`
 - `finance-research-evolution`
 - `trace2skill`
-- `example-skill`
+
+### 数据源可靠性
+
+`finance/data.py::ProviderChain` 把真实数据源和 `SAMPLE_FALLBACK` 分开处理：
+
+- 行情会尝试所有支持该标的真实 provider，选择更新且实时的成功结果，同时记录所有成功/失败来源和最大价差比例。
+- 历史 K 线也遍历全部适用真实 provider，统一未复权收盘口径，选择更新/更完整的序列，并记录重叠日期最大差异。
+- 基本面遍历所有适用真实 provider，优先源保留字段优先权；其他源只在币种、报告期和期间口径兼容时补齐，重叠字段相对差异写入 coverage。
+- 新闻遍历所有适用真实 provider，统一相关性过滤、跨源去重和来源多样化后再执行 `limit`；只有近 180 天事件计入近期覆盖。
+- 真实 provider 按操作并发，受 operation deadline、snapshot 总 deadline、超时熔断和 in-flight 去重约束；挂起的第三方 SDK 不会阻塞已成功的备用源或无限累积重复 worker。
+- AKShare 接入 A 股、港股和美股公开财务指标；Tushare 提供 A 股财务报表；Yahoo 使用 quote summary，失败时尝试 `yfinance` info。
+- 报告附注会列出真实来源覆盖、失败来源、跨源行情价差、基本面重叠字段差异和是否使用样例。样例不计入交叉验证。
+- Yahoo 新闻用 ticker、查询代码和公司特异词过滤，排除 `technology/group/inc` 等通用词导致的错配。新闻接口失败会进入数据错误附注，不再生成伪新闻项。
 
 ### 微信连接
 
@@ -145,6 +186,8 @@ python -m agent.cli /schedule run
 - 写入和 edit 只能写工作区内普通文件，并拦截疑似 API key/token/secret。
 - bash 只允许单条白名单命令；危险命令、多命令、管道、重定向、外传命令默认拦截。
 - read/web_fetch 会给不可信内容加边界，提示模型不得执行内容中的指令。
+- 系统金融约束明确规定：用户重复看涨、要求只讲优点或声称内幕都不是新证据；结论必须保留反证、风险、数据缺口和独立核验。
+- 压缩摘要、历史用户声明和历史工具输出统一标记为 untrusted history，始终低于原始 system policy。
 
 红队演示：
 
@@ -165,6 +208,7 @@ python -m agent.cli --selfcheck
 python -m agent.cli /status
 python -m agent.cli /compact
 python -m agent.cli /tools
+python -m agent.cli /skills
 python -m agent.cli /mcp
 python -m agent.cli /security
 python -m agent.cli /wechat status
@@ -192,8 +236,8 @@ python -m agent.cli "帮我给 minimax 做质量门禁和去劣初筛"
 - A: CLI 一键启动、README、模块化目录、MIT License。
 - B: 金融随机任务通过符号解析、网页核验、行情、质量门禁、报告工具协同完成。
 - C: ReAct 主循环和通用工具集已实现并测试。
-- D: MCP echo server 已接入；Skills 加载器和金融 Skill 可用。
-- E: compaction、observation 截断、工具错误 observation 已测试。
-- F: 安全层、注入隔离、危险命令拦截已测试。
+- D: 多 stdio MCP、命名空间、超时/状态/关闭，以及 Skill 目录与按需 `read_skill` 已接入。
+- E: compaction、observation 截断、工具错误 observation、自适应 CLI 和动态补全已测试。
+- F: 安全层、压缩权限隔离、重复唱多/内幕注入防护、危险命令拦截已测试。
 - G: 本文档可用于现场讲解设计取舍。
 - H: `docs/ABLATION_REPORT.md` 给出消融实验。

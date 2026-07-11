@@ -32,6 +32,7 @@ class Quote:
     source: str = ""
     as_of: str = ""
     is_realtime: bool = False
+    source_spread_pct: float | None = None
     notes: list[str] = field(default_factory=list)
 
 
@@ -40,6 +41,9 @@ class Financials:
     symbol: str
     source: str = ""
     as_of: str = ""
+    currency: str = ""
+    period_type: str = ""
+    fetched_at: str = ""
     market_cap: float | None = None
     pe_ratio: float | None = None
     forward_pe: float | None = None
@@ -51,6 +55,7 @@ class Financials:
     debt_to_equity: float | None = None
     return_on_equity: float | None = None
     profit_margin: float | None = None
+    field_sources: dict[str, str] = field(default_factory=dict)
     notes: list[str] = field(default_factory=list)
 
 
@@ -73,6 +78,7 @@ class StockSnapshot:
     news: list[NewsItem]
     indicators: dict[str, Any]
     fetched_at: str
+    source_coverage: dict[str, dict[str, Any]] = field(default_factory=dict)
 
 
 def utc_now_iso() -> str:

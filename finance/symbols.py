@@ -4,6 +4,18 @@ from __future__ import annotations
 import re
 
 CHINESE_SYMBOLS = {
+    "apple": "AAPL",
+    "apple inc": "AAPL",
+    "nvidia": "NVDA",
+    "microsoft": "MSFT",
+    "tesla": "TSLA",
+    "amazon": "AMZN",
+    "alphabet": "GOOGL",
+    "google": "GOOGL",
+    "tencent": "0700.HK",
+    "alibaba": "BABA",
+    "meituan": "3690.HK",
+    "advanced micro devices": "AMD",
     "苹果": "AAPL",
     "英伟达": "NVDA",
     "辉达": "NVDA",
@@ -90,29 +102,68 @@ def extract_symbols(text: str) -> list[str]:
     found: list[str] = []
     lowered = text.lower()
     for name, symbol in sorted(CHINESE_SYMBOLS.items(), key=lambda item: len(item[0]), reverse=True):
-        if name in lowered:
+        if _alias_in_text(name, lowered):
             found.append(symbol)
 
     for match in re.finditer(r"(?:xueqiu\.com/S/|雪球[:：]?\s*)(\d{4,5})", text, flags=re.IGNORECASE):
         found.append(normalize_symbol(match.group(1)))
 
     text_without_urls = re.sub(r"https?://\S+", " ", text)
-    pattern = re.compile(r"\b[A-Za-z]{1,6}(?:\.[A-Za-z]{1,4})?\b|\b\d{4,6}(?:\.[A-Za-z]{1,4})?\b")
+    pattern = re.compile(
+        r"(?<![\w$])\$?[A-Za-z]{1,6}(?:\.[A-Za-z]{1,4})?(?!\w)"
+        r"|(?<![\w$])\$?\d{4,6}(?:\.[A-Za-z]{1,4})?(?!\w)"
+    )
     ignored = {
         "MA", "MACD", "RSI", "PE", "EPS", "ROE", "ETF", "API", "MVP", "CSV",
         "HTTP", "HTTPS", "URL", "WWW", "COM", "AI", "AGENT", "DAY", "BUY", "SELL",
-        "IPO",
+        "IPO", "I", "IS", "AM", "ARE", "THE", "THIS", "THAT", "THINK", "GREAT",
+        "GOOD", "BEST", "WILL", "WOULD", "COULD", "SHOULD", "RISE", "FALL", "STOCK",
+        "PRICE", "ONLY", "JUST", "IGNORE", "RISK", "RISKS", "NEWS", "SAYS", "SAID",
+        "UP", "DOWN", "AND", "OR", "OF", "TO", "IN", "ON", "FOR", "WITH", "IT",
+        "ITS", "A", "AN", "AS", "BE", "ME", "MY", "YOU", "YOUR", "WE", "THEY",
+        "HE", "SHE", "ALL", "MUST", "SURE", "CERTAIN", "GUARANTEED", "OUTLOOK",
     }
+    known_tickers = _known_ticker_tokens()
+    priority: list[str] = []
+    other: list[str] = []
     for match in pattern.finditer(text_without_urls):
-        token = match.group(0)
-        if token.upper() in ignored:
+        raw_token = match.group(0)
+        explicit = raw_token.startswith("$") or "." in raw_token
+        token = raw_token.removeprefix("$")
+        upper = token.upper()
+        if upper in ignored and not explicit:
+            continue
+        numeric_part = token.split(".", 1)[0]
+        if numeric_part.isdigit() and 1900 <= int(numeric_part) <= 2099 and not explicit:
+            continue
+        if token[0].isalpha() and token != upper and token.lower() not in known_tickers and not explicit:
             continue
         normalized = normalize_symbol(token)
-        if normalized and normalized not in ignored:
-            found.append(normalized)
+        if not normalized or normalized in ignored:
+            continue
+        target = priority if token.lower() in known_tickers or explicit else other
+        target.append(normalized)
+
+    found.extend(priority)
+    found.extend(other)
 
     unique: list[str] = []
     for symbol in found:
         if symbol not in unique:
             unique.append(symbol)
     return unique
+
+
+def _alias_in_text(alias: str, lowered_text: str) -> bool:
+    if re.search(r"[a-z]", alias):
+        return bool(re.search(rf"(?<![a-z0-9]){re.escape(alias)}(?![a-z0-9])", lowered_text))
+    return alias in lowered_text
+
+
+def _known_ticker_tokens() -> set[str]:
+    tokens: set[str] = set()
+    for symbol in CHINESE_SYMBOLS.values():
+        lowered = symbol.lower()
+        tokens.add(lowered)
+        tokens.add(lowered.split(".", 1)[0])
+    return tokens

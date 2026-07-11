@@ -37,6 +37,7 @@ class Tool:
 @dataclass
 class ToolRegistry:
     _tools: dict[str, Tool] = field(default_factory=dict)
+    _managed_resources: list[Any] = field(default_factory=list, repr=False)
 
     def register(self, tool: Tool) -> None:
         if tool.name in self._tools:
@@ -52,6 +53,56 @@ class ToolRegistry:
     def names(self) -> list[str]:
         return list(self._tools)
 
+    def manage(self, resource: Any) -> None:
+        """Attach a runtime resource so callers can inspect and close it centrally."""
+        self._managed_resources.append(resource)
+
+    def mcp_statuses(self) -> list[dict[str, str]]:
+        rows: list[dict[str, str]] = []
+        for resource in self._managed_resources:
+            statuses = getattr(resource, "statuses", None)
+            if callable(statuses):
+                rows.extend(statuses())
+        return sorted(rows, key=lambda row: row.get("name", ""))
+
+    def mcp_prompts(self) -> list[dict[str, Any]]:
+        prompts: list[dict[str, Any]] = []
+        for resource in self._managed_resources:
+            catalog = getattr(resource, "prompt_catalog", None)
+            if callable(catalog):
+                prompts.extend(catalog())
+        return sorted(prompts, key=lambda item: (item.get("server", ""), item.get("name", "")))
+
+    def get_mcp_prompt(
+        self,
+        server: str,
+        name: str,
+        arguments: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        for resource in self._managed_resources:
+            getter = getattr(resource, "get_prompt", None)
+            if not callable(getter):
+                continue
+            try:
+                return getter(server, name, arguments)
+            except KeyError:
+                continue
+        raise KeyError(f"unknown MCP prompt '{server}/{name}'")
+
+    def close(self) -> None:
+        """Close every managed runtime, even if one close operation fails."""
+        errors: list[str] = []
+        for resource in reversed(self._managed_resources):
+            close = getattr(resource, "close", None)
+            if not callable(close):
+                continue
+            try:
+                close()
+            except Exception as exc:  # noqa: BLE001 - finish closing the remaining resources
+                errors.append(str(exc))
+        if errors:
+            raise RuntimeError("failed to close managed resources: " + "; ".join(errors))
+
     def __len__(self) -> int:
         return len(self._tools)
 
@@ -65,6 +116,7 @@ def build_default_registry() -> ToolRegistry:
     from .more_tools import edit_tool, glob_tool, grep_tool, task_list_tool
     from .scheduler_tools import scheduler_tools
     from .shell import bash_tool
+    from .skill_tools import read_skill_tool
     from .trace2skill_tools import trace2skill_tools
     from .web_tools import web_tools
     from .wechat_tools import wechat_tools
@@ -77,6 +129,7 @@ def build_default_registry() -> ToolRegistry:
         grep_tool,
         glob_tool,
         task_list_tool,
+        read_skill_tool,
         *finance_tools,
         *evolution_tools,
         *trace2skill_tools,
@@ -86,12 +139,7 @@ def build_default_registry() -> ToolRegistry:
     ]:
         reg.register(tool)
 
-    try:
-        from mcp.client import default_echo_client, register_mcp_tools
+    from mcp.client import connect_project_mcp
 
-        client = default_echo_client()
-        client.start()
-        register_mcp_tools(reg, client)
-    except Exception:
-        pass
+    connect_project_mcp(reg)
     return reg

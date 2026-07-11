@@ -34,8 +34,9 @@ def test_maybe_compact_preserves_system_and_recent_messages() -> None:
     compacted = maybe_compact(messages, budget=100)
 
     assert compacted[0] == {"role": "system", "content": "system"}
-    assert compacted[1]["role"] == "system"
+    assert compacted[1]["role"] == "assistant"
     assert "compacted" in compacted[1]["content"]
+    assert sum(message["role"] == "system" for message in compacted) == 1
     assert len(compacted) < len(messages)
 
 
@@ -145,6 +146,7 @@ def test_status_command_reports_runtime_summary(monkeypatch: pytest.MonkeyPatch)
         provider = Provider()
 
     router = CommandRouter(ToolRegistry(), finance_agent=Finance())  # type: ignore[arg-type]
+    monkeypatch.setenv("FINANCE_AGENT_LANG", "zh")
     monkeypatch.setenv("DEEPSEEK_BASE_URL", "https://user:pass@example.com:8443/v1?token=secret")
 
     output = router.handle("/status", think_enabled=True).output
@@ -153,9 +155,42 @@ def test_status_command_reports_runtime_summary(monkeypatch: pytest.MonkeyPatch)
     assert "thinking: on" in output
     assert "License: MIT" in output
     assert "STATIC" in output
+    assert "Skills:" in output
     assert "https://example.com:8443/v1" in output
     assert "token=secret" not in output
     assert "user:pass" not in output
+
+
+def test_skills_command_lists_on_demand_skills() -> None:
+    router = CommandRouter(ToolRegistry(), finance_agent=StatusFinance())  # type: ignore[arg-type]
+
+    output = router.handle("/skills").output
+
+    assert "Skills" in output
+    assert "finance-history-learning" in output
+
+
+def test_mcp_command_reports_server_tools_and_prompts() -> None:
+    class Runtime:
+        def statuses(self):  # noqa: ANN201
+            return [{"name": "research", "status": "connected", "detail": "2 tools"}]
+
+        def prompt_catalog(self):  # noqa: ANN201
+            return [{"server": "research", "name": "daily", "description": "Daily review", "arguments": []}]
+
+        def close(self) -> None:
+            pass
+
+    registry = ToolRegistry()
+    registry.register(Tool("mcp__research__search", "", {"type": "object", "properties": {}}, lambda: ""))
+    registry.manage(Runtime())
+    router = CommandRouter(registry, finance_agent=StatusFinance())  # type: ignore[arg-type]
+
+    output = router.handle("/mcp").output
+
+    assert "research: connected" in output
+    assert "mcp__research__search" in output
+    assert "/mcp:research:daily" in output
 
 
 def test_compact_command_requests_session_compaction() -> None:

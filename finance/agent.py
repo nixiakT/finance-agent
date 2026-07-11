@@ -1,6 +1,7 @@
 """High-level finance research facade used by tools and CLI."""
 from __future__ import annotations
 
+from functools import wraps
 import re
 
 from .backtest import backtest_moving_average_cross, format_backtest, parse_strategy
@@ -8,7 +9,7 @@ from .data import ProviderChain, export_history_csv
 from .debate import debate_stocks
 from .history_learning import learn_from_history, render_learning, save_learning, update_history_learning_skill
 from .indicators import calculate_indicators, format_indicators
-from .models import Financials, NewsItem, Quote, StockSnapshot, utc_now_iso
+from .models import Financials, Quote, StockSnapshot, utc_now_iso
 from .paper_portfolio import (
     construct_portfolio,
     load_account,
@@ -30,11 +31,27 @@ from .symbols import extract_symbols, normalize_symbol
 from .web import web_search
 
 
+def _with_provider_request_deadline(method):  # noqa: ANN001, ANN201
+    @wraps(method)
+    def wrapped(self, *args, **kwargs):  # noqa: ANN001, ANN202
+        deadline = getattr(self.provider, "request_deadline", None)
+        if not callable(deadline):
+            return method(self, *args, **kwargs)
+        with deadline():
+            return method(self, *args, **kwargs)
+
+    return wrapped
+
+
 class FinanceResearchAgent:
     def __init__(self, provider: ProviderChain | None = None):
         self.provider = provider or ProviderChain()
 
+    @_with_provider_request_deadline
     def snapshot(self, symbol: str, period: str = "1y", news_limit: int = 5) -> StockSnapshot:
+        reset_coverage = getattr(self.provider, "reset_coverage", None)
+        if callable(reset_coverage):
+            reset_coverage()
         normalized = _resolve_symbol(symbol)
         errors: list[str] = []
         try:
@@ -69,23 +86,23 @@ class FinanceResearchAgent:
         try:
             news = self.provider.get_news(normalized, news_limit) if news_limit > 0 else []
         except Exception as exc:
-            news = [
-                NewsItem(
-                    title=f"新闻获取失败: {_compact_error(exc)}",
-                    source="UNAVAILABLE",
-                    published_at=utc_now_iso(),
-                )
-            ]
+            news = []
             errors.append(f"新闻获取失败: {_compact_error(exc)}")
 
         if financials.market_cap is None and quote.market_cap is not None:
             financials.market_cap = quote.market_cap
+            financials.field_sources["market_cap"] = _quote_field_source(quote)
         if financials.pe_ratio is None and quote.pe_ratio is not None:
             financials.pe_ratio = quote.pe_ratio
+            financials.field_sources["pe_ratio"] = _quote_field_source(quote)
         if financials.eps is None and quote.eps is not None:
             financials.eps = quote.eps
+            financials.field_sources["eps"] = _quote_field_source(quote)
         if errors:
             _extend_unique(quote.notes, errors)
+        report_notes = getattr(self.provider, "report_notes", None)
+        if callable(report_notes):
+            _extend_unique(quote.notes, report_notes())
 
         indicators = calculate_indicators(history)
         return StockSnapshot(
@@ -96,9 +113,14 @@ class FinanceResearchAgent:
             news=news,
             indicators=indicators,
             fetched_at=utc_now_iso(),
+            source_coverage=_source_coverage(self.provider),
         )
 
+    @_with_provider_request_deadline
     def quick_snapshot(self, symbol: str, period: str = "6mo") -> StockSnapshot:
+        reset_coverage = getattr(self.provider, "reset_coverage", None)
+        if callable(reset_coverage):
+            reset_coverage()
         normalized = _resolve_symbol(symbol)
         errors: list[str] = []
         try:
@@ -120,14 +142,29 @@ class FinanceResearchAgent:
         financials = Financials(
             symbol=normalized,
             source="SKIPPED",
-            as_of=utc_now_iso(),
+            as_of=quote.as_of,
+            currency=quote.currency,
+            period_type="quote",
+            fetched_at=utc_now_iso(),
             market_cap=quote.market_cap,
             pe_ratio=quote.pe_ratio,
             eps=quote.eps,
+            field_sources={
+                name: _quote_field_source(quote)
+                for name, value in (
+                    ("market_cap", quote.market_cap),
+                    ("pe_ratio", quote.pe_ratio),
+                    ("eps", quote.eps),
+                )
+                if value is not None
+            },
             notes=["quick review skips full fundamentals for speed"],
         )
         if errors:
             _extend_unique(quote.notes, errors)
+        report_notes = getattr(self.provider, "report_notes", None)
+        if callable(report_notes):
+            _extend_unique(quote.notes, report_notes())
         return StockSnapshot(
             symbol=normalized,
             quote=quote,
@@ -136,6 +173,7 @@ class FinanceResearchAgent:
             news=[],
             indicators=calculate_indicators(history),
             fetched_at=utc_now_iso(),
+            source_coverage=_source_coverage(self.provider),
         )
 
     def get_quote(self, symbol: str) -> str:
@@ -548,8 +586,8 @@ def _resolve_symbol(symbol: str) -> str:
         return normalize_symbol(stripped)
     try:
         return resolve_symbol(symbol).symbol
-    except Exception:
-        return normalize_symbol(symbol)
+    except Exception as exc:
+        raise ValueError(f"无法可靠解析标的 {symbol!r}，请先用 /resolve 确认 ticker。") from exc
 
 
 def _looks_like_stock_task(task: str) -> bool:
@@ -566,12 +604,26 @@ def _extract_name_query(task: str) -> str:
     return " ".join(cleaned.split()) or task
 
 
+def _source_coverage(provider) -> dict[str, dict]:  # noqa: ANN001
+    getter = getattr(provider, "source_coverage", None)
+    if not callable(getter):
+        return {}
+    return {
+        method: getter(method)
+        for method in ("get_quote", "get_history", "get_financials", "get_news")
+    }
+
+
 def _compact_error(exc: Exception, limit: int = 220) -> str:
     text = " ".join(str(exc).split())
     text = text.replace("For more information check:", "详情:")
     if len(text) <= limit:
         return text
     return text[:limit] + "..."
+
+
+def _quote_field_source(quote: Quote) -> str:
+    return f"{quote.source or 'UNKNOWN'} (quote, {quote.as_of or '未知时点'})"
 
 
 def _verification_query(task: str, symbol: str) -> str:

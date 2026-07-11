@@ -4,51 +4,24 @@ from __future__ import annotations
 import re
 import sys
 from pathlib import Path
-from typing import Iterable
+from typing import Callable, Iterable
 
-
-DEFAULT_COMMANDS = [
-    "/help",
-    "/think on",
-    "/think off",
-    "/selfcheck",
-    "/clear",
-    "/compact",
-    "/exit",
-    "/status",
-    "/security",
-    "/mcp",
-    "/proxy ",
-    "/wechat ",
-    "/memory ",
-    "/evolve ",
-    "/predict ",
-    "/schedule ",
-    "/portfolio ",
-    "/learn-history ",
-    "/lang ",
-    "/quote ",
-    "/quality ",
-    "/history ",
-    "/financials ",
-    "/news ",
-    "/indicators ",
-    "/report ",
-    "/compare ",
-    "/debate ",
-    "/backtest ",
-    "/brief ",
-    "/search ",
-    "/fetch ",
-    "/tools",
-    "/sources",
-]
-
+from agent.command_catalog import command_completions, completion_meta
 
 class InteractiveInput:
-    def __init__(self, prompt: str, commands: Iterable[str] = DEFAULT_COMMANDS):
+    def __init__(
+        self,
+        prompt: str,
+        commands: Iterable[str] | None = None,
+        command_metadata: dict[str, str] | None = None,
+        completion_refresh: Callable[[], tuple[list[str], dict[str, str]]] | None = None,
+        bottom_toolbar: Callable[[], str] | None = None,
+    ):
         self.prompt = prompt
-        self.commands = list(commands)
+        self.commands = list(commands) if commands is not None else command_completions()
+        self.command_metadata = command_metadata if command_metadata is not None else completion_meta()
+        self.completion_refresh = completion_refresh
+        self.bottom_toolbar = bottom_toolbar
         self._session = self._build_prompt_session()
         self._setup_readline_fallback()
 
@@ -62,7 +35,7 @@ class InteractiveInput:
             return None
         try:
             from prompt_toolkit import PromptSession
-            from prompt_toolkit.completion import WordCompleter
+            from prompt_toolkit.completion import FuzzyCompleter, WordCompleter
             from prompt_toolkit.formatted_text import ANSI
             from prompt_toolkit.history import FileHistory
             from prompt_toolkit.key_binding import KeyBindings
@@ -76,16 +49,31 @@ class InteractiveInput:
             event.current_buffer.insert_text("\n")
 
         history_path = Path.home() / ".finance_agent_history"
-        completer = WordCompleter(self.commands, ignore_case=True, sentence=True)
+        base_completer = WordCompleter(
+            self._completion_words,
+            ignore_case=True,
+            sentence=True,
+            meta_dict=self.command_metadata,
+        )
+        completer = FuzzyCompleter(base_completer, pattern=r"^.*")
         return PromptSession(
             message=ANSI(self.prompt),
             history=FileHistory(str(history_path)),
             completer=completer,
-            complete_while_typing=False,
+            complete_while_typing=True,
             multiline=False,
             key_bindings=bindings,
             enable_history_search=True,
+            bottom_toolbar=self.bottom_toolbar,
         )
+
+    def _completion_words(self) -> list[str]:
+        if self.completion_refresh is not None:
+            commands, metadata = self.completion_refresh()
+            self.commands = list(commands)
+            self.command_metadata.clear()
+            self.command_metadata.update(metadata)
+        return self.commands
 
     def _setup_readline_fallback(self) -> None:
         if self._session is not None or not sys.stdin.isatty():
