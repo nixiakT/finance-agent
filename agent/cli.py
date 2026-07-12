@@ -8,6 +8,7 @@ from __future__ import annotations
 import argparse
 import importlib.metadata
 import json
+import os
 import re
 import shlex
 import sys
@@ -122,7 +123,8 @@ def build_agent(observer=None, registry=None):
         from backend.fake_backend import FakeBackend
         print(f"[提示] 未启用真后端（{e}），回退 FakeBackend。配置 DEEPSEEK_API_KEY 后即用真模型。")
         backend = FakeBackend()
-    return AgentLoop(backend, reg, build_system_prompt(), observer=observer)
+    auto_approve = os.environ.get("MINI_OPENCLAW_AUTO_APPROVE", "").lower() in {"1", "true", "yes"}
+    return AgentLoop(backend, reg, build_system_prompt(), auto_approve=auto_approve, observer=observer)
 
 
 class TracePrinter:

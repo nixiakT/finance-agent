@@ -12,8 +12,10 @@
 工具结果会被截断，长会话会按预算压缩，避免把上下文撑爆。
 """
 from __future__ import annotations
+from pathlib import Path
 from typing import Any, Callable, Iterable
 
+from agent import permissions
 from agent.context import (
     compact_with_model,
     maybe_compact,
@@ -48,6 +50,8 @@ class AgentLoop:
                  max_turns: int = 20,
                  context_budget: int = 6000,
                  max_observation_chars: int = 4000,
+                 auto_approve: bool = True,
+                 workdir: Path | None = None,
                  observer: Callable[[str, dict[str, Any]], None] | None = None,
                  model_tool_exclusions: Iterable[str] | None = None):
         self.backend = backend
@@ -56,6 +60,8 @@ class AgentLoop:
         self.max_turns = max_turns          # 防死循环：硬上限
         self.context_budget = context_budget
         self.max_observation_chars = max_observation_chars
+        self.auto_approve = auto_approve
+        self.workdir = (workdir or Path.cwd()).resolve()
         self.observer = observer
         configured_exclusions = (
             model_tool_exclusions
@@ -107,33 +113,43 @@ class AgentLoop:
 
             for call in tool_calls:
                 name = call["name"]
-                tool = self.registry.get(name) if name in allowed_tool_names else None
+                arguments = call.get("arguments", {})
                 if name not in allowed_tool_names:
                     obs = f"错误：工具 {name} 未向当前模型公开"
-                elif tool is None:
-                    obs = f"错误：未知工具 {call['name']}"
                 else:
-                    try:
-                        self._emit("tool_start", {
-                            "name": call["name"],
-                            "arguments": call.get("arguments", {}),
-                        })
-                        obs = _prepare_tool_observation(
-                            call["name"],
-                            str(tool.run(**call.get("arguments", {}))),
-                            self.max_observation_chars,
-                        )
-                        self._emit("tool_end", {
-                            "name": call["name"],
-                            "preview": _preview(obs),
-                        })
-                    except Exception as exc:  # noqa: BLE001 - surface tool errors to the model/user
-                        obs = f"工具 {call['name']} 执行失败：{exc}"
-                        self._emit("tool_error", {
-                            "name": call["name"],
-                            "error": str(exc),
-                        })
-                messages.append({"role": "tool", "name": call["name"],
+                    verdict = permissions.check(name, arguments, self.workdir)
+                    if verdict == "deny":
+                        obs = permissions.denial_message(name, arguments, self.workdir)
+                        self._emit("tool_error", {"name": name, "error": obs})
+                    elif verdict == "confirm" and not self.auto_approve:
+                        obs = permissions.confirmation_message(name, arguments)
+                        self._emit("tool_error", {"name": name, "error": obs})
+                    else:
+                        tool = self.registry.get(name)
+                        if tool is None:
+                            obs = f"错误：未知工具 {name}"
+                        else:
+                            try:
+                                self._emit("tool_start", {
+                                    "name": name,
+                                    "arguments": arguments,
+                                })
+                                obs = _prepare_tool_observation(
+                                    name,
+                                    str(tool.run(**arguments)),
+                                    self.max_observation_chars,
+                                )
+                                self._emit("tool_end", {
+                                    "name": name,
+                                    "preview": _preview(obs),
+                                })
+                            except Exception as exc:  # noqa: BLE001 - surface tool errors to the model/user
+                                obs = f"工具 {name} 执行失败：{exc}"
+                                self._emit("tool_error", {
+                                    "name": name,
+                                    "error": str(exc),
+                                })
+                messages.append({"role": "tool", "name": name,
                                  "tool_call_id": call.get("id"), "content": obs})
 
         return "[达到最大轮数上限，未完成任务]"
