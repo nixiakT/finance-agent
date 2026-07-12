@@ -8,7 +8,7 @@ import pytest
 from agent.cli import TracePrinter, _should_route_finance, main
 from agent.commands import CommandRouter
 from agent.context import maybe_compact, truncate_observation
-from agent.loop import AgentLoop, AgentSession
+from agent.loop import AgentLoop, AgentSession, ModelCallError
 from agent.ui import render_trace
 from finance.data import ProviderError
 from finance.evolution import add_memory, extract_learning, list_memories
@@ -494,28 +494,320 @@ def test_main_handles_single_shot_slash_command_with_args(capsys: Any, monkeypat
     assert "tool result web_search" not in output
 
 
-def test_main_routes_natural_finance_task_deterministically(capsys: Any, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_main_routes_natural_finance_task_through_agent_loop(capsys: Any, monkeypatch: pytest.MonkeyPatch) -> None:
     from finance.agent import FinanceResearchAgent
 
-    monkeypatch.setattr(
-        FinanceResearchAgent,
-        "route_task",
-        lambda self, task: f"routed finance task: {task}",
-    )
+    backend = RecordingBackend("model analyzed finance task")
 
-    assert main(["SpaceX", "最近情况如何"]) == 0
+    def build(observer=None, registry=None):  # noqa: ANN001, ANN202
+        return AgentLoop(backend, registry or ToolRegistry(), "system", observer=observer)
+
+    monkeypatch.setattr("agent.cli.build_agent", build)
+    monkeypatch.setattr(FinanceResearchAgent, "route_task", lambda *args: pytest.fail("bypassed AgentLoop"))
+
+    assert main(["分析", "AAPL"]) == 0
 
     output = capsys.readouterr().out
 
     assert "thinking summary" in output
-    assert "finance_route_task" in output
-    assert "routed finance task: SpaceX 最近情况如何" in output
+    assert "model analyzed finance task" in output
+    assert backend.user_tasks == ["分析 AAPL"]
 
 
-def test_finance_task_router_does_not_capture_general_dev_tasks() -> None:
+def test_interactive_natural_finance_task_uses_agent_session(capsys: Any, monkeypatch: pytest.MonkeyPatch) -> None:
+    from finance.agent import FinanceResearchAgent
+
+    backend = RecordingBackend("interactive model answer")
+
+    def build(observer=None, registry=None):  # noqa: ANN001, ANN202
+        return AgentLoop(backend, registry or ToolRegistry(), "system", observer=observer)
+
+    class ScriptedInput:
+        def __init__(self, *args, **kwargs):  # noqa: ANN001
+            self._values = iter(("分析 AAPL", "/exit"))
+
+        def read(self) -> str:
+            return next(self._values)
+
+    monkeypatch.setattr("agent.cli.build_agent", build)
+    monkeypatch.setattr("agent.cli.InteractiveInput", ScriptedInput)
+    monkeypatch.setattr(FinanceResearchAgent, "route_task", lambda *args: pytest.fail("bypassed AgentSession"))
+
+    assert main([]) == 0
+
+    output = capsys.readouterr().out
+    assert "interactive model answer" in output
+    assert backend.user_tasks == ["分析 AAPL"]
+
+
+def test_explicit_report_stays_deterministic(capsys: Any, monkeypatch: pytest.MonkeyPatch) -> None:
+    from finance.agent import FinanceResearchAgent
+
+    monkeypatch.setattr(
+        FinanceResearchAgent,
+        "generate_report",
+        lambda self, symbol, period="1y": f"deterministic report {symbol} {period}",
+    )
+    monkeypatch.setattr("agent.cli.build_agent", lambda *args, **kwargs: pytest.fail("slash command used model"))
+
+    assert main(["/report", "AAPL", "3mo"]) == 0
+
+    output = capsys.readouterr().out
+    assert "deterministic report AAPL 3mo" in output
+    assert "finance_generate_report" in output
+    assert "model turn" not in output
+
+
+def test_first_model_call_failure_uses_finance_fallback_once(capsys: Any, monkeypatch: pytest.MonkeyPatch) -> None:
+    from finance.agent import FinanceResearchAgent
+
+    backend = AlwaysFailBackend(
+        "request failed token=abcdefghijklmnop sk-1234567890abcdef"
+    )
+    fallback_tasks: list[str] = []
+
+    def build(observer=None, registry=None):  # noqa: ANN001, ANN202
+        return AgentLoop(backend, registry or ToolRegistry(), "system", observer=observer)
+
+    def fallback(self, task: str) -> str:  # noqa: ANN001
+        fallback_tasks.append(task)
+        return "deterministic fallback report"
+
+    monkeypatch.setattr("agent.cli.build_agent", build)
+    monkeypatch.setattr(FinanceResearchAgent, "route_task", fallback)
+
+    assert main(["分析", "AAPL"]) == 0
+
+    output = capsys.readouterr().out
+    assert "deterministic fallback report" in output
+    assert "首轮" in output and "兜底" in output
+    assert "abcdefghijklmnop" not in output
+    assert "sk-1234567890abcdef" not in output
+    assert "[REDACTED_SECRET]" in output
+    assert backend.calls == 1
+    assert fallback_tasks == ["分析 AAPL"]
+
+
+def test_interactive_first_model_failure_uses_fallback_once(capsys: Any, monkeypatch: pytest.MonkeyPatch) -> None:
+    from finance.agent import FinanceResearchAgent
+
+    backend = AlwaysFailBackend()
+    fallback_tasks: list[str] = []
+
+    def build(observer=None, registry=None):  # noqa: ANN001, ANN202
+        return AgentLoop(backend, registry or ToolRegistry(), "system", observer=observer)
+
+    class ScriptedInput:
+        def __init__(self, *args, **kwargs):  # noqa: ANN001
+            self._values = iter(("分析 AAPL", "/exit"))
+
+        def read(self) -> str:
+            return next(self._values)
+
+    def fallback(self, task: str) -> str:  # noqa: ANN001
+        fallback_tasks.append(task)
+        return "interactive fallback report"
+
+    monkeypatch.setattr("agent.cli.build_agent", build)
+    monkeypatch.setattr("agent.cli.InteractiveInput", ScriptedInput)
+    monkeypatch.setattr(FinanceResearchAgent, "route_task", fallback)
+
+    assert main([]) == 0
+
+    output = capsys.readouterr().out
+    assert "interactive fallback report" in output
+    assert backend.calls == 1
+    assert fallback_tasks == ["分析 AAPL"]
+
+
+def test_session_rolls_back_messages_when_model_call_fails() -> None:
+    session = AgentSession(AgentLoop(AlwaysFailBackend(), ToolRegistry(), "system"))
+    before = list(session.messages)
+
+    with pytest.raises(ModelCallError) as error:
+        session.ask("分析 AAPL")
+
+    assert error.value.turn == 1
+    assert session.messages == before
+
+
+def test_model_error_trace_and_exception_redact_secrets(capsys: Any) -> None:
+    secret = "sk-1234567890abcdef"
+    printer = TracePrinter(lambda: "on")
+    loop = AgentLoop(
+        AlwaysFailBackend(f"api_key={secret}"),
+        ToolRegistry(),
+        "system",
+        observer=printer.observe,
+    )
+
+    with pytest.raises(ModelCallError) as error:
+        loop.run("hello")
+
+    output = capsys.readouterr().out
+    assert secret not in output
+    assert secret not in str(error.value)
+    assert "[REDACTED_SECRET]" in output
+
+
+def test_later_model_failure_does_not_repeat_finance_side_effect(capsys: Any, monkeypatch: pytest.MonkeyPatch) -> None:
+    from finance.agent import FinanceResearchAgent
+
+    side_effects: list[str] = []
+    tool_registry = ToolRegistry()
+    tool_registry.register(Tool(
+        name="finance_side_effect",
+        description="record one side effect",
+        parameters={"type": "object", "properties": {}},
+        run=lambda: side_effects.append("ran") or "done",
+    ))
+    backend = ToolThenFailBackend("finance_side_effect")
+
+    def build(observer=None, registry=None):  # noqa: ANN001, ANN202
+        return AgentLoop(backend, registry or tool_registry, "system", observer=observer)
+
+    monkeypatch.setattr("agent.cli.build_agent", build)
+    monkeypatch.setattr(FinanceResearchAgent, "route_task", lambda *args: pytest.fail("unsafe repeat fallback"))
+
+    assert main(["分析", "AAPL"]) == 1
+
+    output = capsys.readouterr().out
+    assert "第 2 轮" in output
+    assert "不自动兜底" in output
+    assert side_effects == ["ran"]
+
+
+def test_finance_fallback_detector_is_conservative() -> None:
     assert _should_route_finance("SpaceX 最近情况如何")
     assert _should_route_finance("给 agent 100万 自己投资 AAPL MSFT NVDA 买多少")
+    assert _should_route_finance("分析 BRK.B")
+    assert _should_route_finance("600519 怎么样")
+    assert _should_route_finance("腾讯最近怎么样")
     assert not _should_route_finance("open README and replace a heading")
+    assert not _should_route_finance("summarize git history")
+    assert not _should_route_finance("explain machine learning")
+    assert not _should_route_finance("查 Python 3.12 的新特性")
+    assert not _should_route_finance("分析 lab6.md 为什么失败")
+    assert not _should_route_finance("比较 GPT-4 和 Claude 3")
+    assert not _should_route_finance("看看 README 第2章")
+    assert not _should_route_finance("如何投资自己的学习时间")
+    assert not _should_route_finance("帮我复习组合数学")
+    assert not _should_route_finance("review my portfolio website")
+    assert not _should_route_finance("explain HTML meta tags")
+    assert not _should_route_finance("查订单 123456 最近情况")
+    assert not _should_route_finance("分析课程编号 02513")
+    assert not _should_route_finance("计算组合数 C(10,2)")
+    assert not _should_route_finance("比较两种模型的历史学习方法")
+    assert not _should_route_finance("智谱 GLM API 报错怎么修")
+    assert not _should_route_finance("腾讯云 SDK 怎么配置")
+    assert not _should_route_finance("AMD GPU 驱动报错")
+    assert not _should_route_finance("SpaceX API 怎么用")
+
+
+@pytest.mark.parametrize("task", [
+    "分析 BRK.B",
+    "SpaceX 最近情况如何",
+    "600519 怎么样",
+    "腾讯最近怎么样",
+    "看看智谱今天的情况",
+    "给 02513 做质量门禁",
+])
+def test_fake_backend_keeps_finance_tasks_inside_agent_loop(task: str) -> None:
+    from backend.fake_backend import FakeBackend
+
+    answer = FakeBackend().chat(
+        [{"role": "user", "content": task}],
+        tools=[{"function": {"name": "finance_route_task"}}],
+    )
+
+    assert [call["name"] for call in answer["tool_calls"]] == ["finance_route_task"]
+
+
+def test_fake_backend_does_not_expose_finance_trust_wrapper() -> None:
+    from backend.fake_backend import FakeBackend
+
+    registry = ToolRegistry()
+    registry.register(Tool(
+        name="finance_route_task",
+        description="offline finance route",
+        parameters={
+            "type": "object",
+            "properties": {"task": {"type": "string"}},
+            "required": ["task"],
+        },
+        run=lambda task: "report body",
+    ))
+
+    answer = AgentLoop(FakeBackend(), registry, "system").run("分析 AAPL")
+
+    assert answer == "report body"
+
+
+def test_deepseek_backend_hides_and_blocks_deterministic_route(monkeypatch: pytest.MonkeyPatch) -> None:
+    import backend.client as client_module
+
+    payloads: list[dict[str, Any]] = []
+    side_effects: list[str] = []
+
+    class Response:
+        def __init__(self, message: dict[str, Any]):
+            self.message = message
+
+        def raise_for_status(self) -> None:
+            return None
+
+        def json(self) -> dict[str, Any]:
+            return {"choices": [{"message": self.message}]}
+
+    class HTTPClient:
+        def post(self, url, headers, json):  # noqa: ANN001, ANN201
+            payloads.append(json)
+            if len(payloads) == 1:
+                return Response({
+                    "content": "",
+                    "tool_calls": [{
+                        "id": "call_hidden",
+                        "function": {"name": "finance_route_task", "arguments": "{}"},
+                    }],
+                })
+            return Response({"content": "hidden tool was blocked", "tool_calls": []})
+
+    http = HTTPClient()
+    monkeypatch.setattr(client_module, "load_local_env", lambda: None)
+    monkeypatch.setattr(client_module, "http_client", lambda **kwargs: http)
+    backend = client_module.DeepSeekBackend(api_key="test-key")
+    registry = ToolRegistry()
+    registry.register(Tool(
+        name="finance_route_task",
+        description="must stay hidden",
+        parameters={"type": "object", "properties": {}},
+        run=lambda: side_effects.append("ran") or "fixed report",
+    ))
+    registry.register(Tool(
+        name="finance_get_quote",
+        description="visible finance tool",
+        parameters={"type": "object", "properties": {}},
+        run=lambda: "quote",
+    ))
+    registry.register(Tool(
+        name="finance_generate_report",
+        description="fixed report must stay hidden",
+        parameters={"type": "object", "properties": {}},
+        run=lambda: "fixed report",
+    ))
+
+    answer = AgentLoop(backend, registry, "system").run("分析 AAPL")
+
+    visible_names = {
+        tool["function"]["name"]
+        for tool in payloads[0]["tools"]
+    }
+    assert answer == "hidden tool was blocked"
+    assert "finance_get_quote" in visible_names
+    assert "finance_route_task" not in visible_names
+    assert "finance_generate_report" not in visible_names
+    assert side_effects == []
+    assert "未向当前模型公开" in payloads[1]["messages"][-1]["content"]
 
 
 def test_finance_memory_sanitizes_secrets(tmp_path: Any) -> None:
@@ -545,6 +837,42 @@ class ToolThenAnswerBackend:
         if messages[-1].get("role") == "tool":
             return {"role": "assistant", "content": messages[-1]["content"], "tool_calls": []}
         return {"role": "assistant", "content": "", "tool_calls": [{"name": self.tool_name, "arguments": {}}]}
+
+
+class RecordingBackend:
+    def __init__(self, answer: str):
+        self.answer = answer
+        self.user_tasks: list[str] = []
+
+    def chat(self, messages: list[dict[str, Any]], tools: list[dict] | None = None) -> dict[str, Any]:
+        self.user_tasks.append(str(messages[-1]["content"]))
+        return {"role": "assistant", "content": self.answer, "tool_calls": []}
+
+
+class AlwaysFailBackend:
+    def __init__(self, message: str = "model unavailable"):
+        self.calls = 0
+        self.message = message
+
+    def chat(self, messages: list[dict[str, Any]], tools: list[dict] | None = None) -> dict[str, Any]:
+        self.calls += 1
+        raise RuntimeError(self.message)
+
+
+class ToolThenFailBackend:
+    def __init__(self, tool_name: str):
+        self.tool_name = tool_name
+        self.calls = 0
+
+    def chat(self, messages: list[dict[str, Any]], tools: list[dict] | None = None) -> dict[str, Any]:
+        self.calls += 1
+        if self.calls == 1:
+            return {
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [{"name": self.tool_name, "arguments": {}}],
+            }
+        raise RuntimeError("second model call failed")
 
 
 class SummarizingBackend:

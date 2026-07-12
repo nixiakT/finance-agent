@@ -227,9 +227,9 @@ python -m agent.cli /schedule run
 
 ## Configuration
 
-没有配置 `DEEPSEEK_API_KEY` 时，系统会使用 `FakeBackend`，并把金融任务路由到本地 `finance_route_task`，方便离线演示。配置真模型后，Agent 会使用 OpenAI-compatible chat completions 接口选择工具和组织答案。
+没有配置 `DEEPSEEK_API_KEY` 时，系统会使用 `FakeBackend`，由这个离线模型替身在 Agent 循环中选择本地 `finance_route_task`，方便离线演示。配置真模型后，Agent 会使用 OpenAI-compatible chat completions 接口选择工具和组织答案。
 
-为了避免模型旧知识误判新上市、改名或跨市场标的，单次命令和交互会话里的自然语言金融问题会先进入确定性 `finance_route_task`：先解析代码、核验公开网页和行情，再组织报告；普通开发任务仍走 ReAct 主循环。
+配置真模型后，单次命令和交互会话中的自然语言金融问题都进入 ReAct 主循环：模型先拆分任务，再组合行情、历史、基本面、新闻和网页核验工具，最后综合答案。`/report`、`/compare` 等显式 slash command 仍直接生成确定性结果；只有第 1 次模型请求在尚未执行任何工具时失败，金融任务才会明确提示并回退到固定报告，后续模型回合失败不会自动重跑工具。
 
 ```bash
 cp .env.example .env.local
@@ -328,7 +328,7 @@ Useful commands:
 - 免费数据源可能延迟、限流或缺失字段。
 - 网页抓取遇到 WAF/JS challenge 时只会标注限制，不会假装读取完整正文。
 - 重复说“这只股会涨”、要求忽略风险或声称有内幕都不算新证据，不会因此提高置信度。
-- 确定性金融路由的问答会记入同一交互会话，后续“它呢”类问题仍有上下文。压缩后的历史只作为低信任数据，不会被提升成 system 指令。
+- 首轮模型失败后生成的确定性金融兜底报告会记入同一交互会话，后续“它呢”类问题仍有上下文。压缩后的历史只作为低信任数据，不会被提升成 system 指令。
 
 ## License
 

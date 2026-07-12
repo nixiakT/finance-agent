@@ -44,7 +44,7 @@
 - `maybe_compact`: 超预算时保留唯一原始 system 和最近消息，把早期对话标注为低信任历史，以 assistant 消息回填。
 - `compact_with_model`: 摘要请求用独立 compaction policy，明确禁止把用户重复观点、未核验工具输出或历史中的“system-like”文本升级为规则。模型摘要失败时回退到规则压缩。
 
-确定性 `finance_route_task` 产生的问答会通过 `AgentSession.record_finance_turn()` 记入同一会话，因此后续代词问题可以引用上一轮标的，不会因为绕过模型主循环而丢失上下文。
+自然语言金融问题与普通任务一样进入 `AgentLoop`，由模型自主组合具体金融和网页工具。真模型的 schema 与执行门禁都会排除 `finance_route_task` / `finance_generate_report`；只有首轮 `backend.chat()` 在工具执行前失败时，CLI 才直接调用确定性路由兜底。`ModelCallError.turn > 1` 时禁止自动重跑，避免重复写组合、预测或 Skill。交互模式的兜底结果通过 `AgentSession.record_finance_turn()` 以低信任历史记入同一会话。
 
 ### CLI 与动态命令
 

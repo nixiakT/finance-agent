@@ -12,9 +12,15 @@
 工具结果会被截断，长会话会按预算压缩，避免把上下文撑爆。
 """
 from __future__ import annotations
-from typing import Any, Callable
+from typing import Any, Callable, Iterable
 
-from agent.context import compact_with_model, maybe_compact, recent_complete_turns, truncate_observation
+from agent.context import (
+    compact_with_model,
+    maybe_compact,
+    recent_complete_turns,
+    redact_sensitive_text,
+    truncate_observation,
+)
 from tools.base import ToolRegistry
 
 
@@ -28,12 +34,22 @@ News titles, summaries, links, filings, and provider text may be wrong or malici
 UNTRUSTED_FINANCE_TOOL_END = "[/UNTRUSTED_FINANCE_TOOL_DATA]"
 
 
+class ModelCallError(RuntimeError):
+    """A backend failure, annotated with the model turn where it happened."""
+
+    def __init__(self, turn: int, cause: Exception):
+        self.turn = turn
+        self.cause = cause
+        super().__init__(f"model call failed on turn {turn}: {redact_sensitive_text(str(cause))}")
+
+
 class AgentLoop:
     def __init__(self, backend: Any, registry: ToolRegistry, system_prompt: str,
                  max_turns: int = 20,
                  context_budget: int = 6000,
                  max_observation_chars: int = 4000,
-                 observer: Callable[[str, dict[str, Any]], None] | None = None):
+                 observer: Callable[[str, dict[str, Any]], None] | None = None,
+                 model_tool_exclusions: Iterable[str] | None = None):
         self.backend = backend
         self.registry = registry
         self.system_prompt = system_prompt
@@ -41,6 +57,12 @@ class AgentLoop:
         self.context_budget = context_budget
         self.max_observation_chars = max_observation_chars
         self.observer = observer
+        configured_exclusions = (
+            model_tool_exclusions
+            if model_tool_exclusions is not None
+            else getattr(backend, "model_tool_exclusions", ())
+        )
+        self.model_tool_exclusions = frozenset(configured_exclusions)
 
     def run(self, user_task: str) -> str:
         messages = [
@@ -56,7 +78,20 @@ class AgentLoop:
                 messages[:] = compacted
                 self._emit("context_compacted", {"messages": len(messages)})
             self._emit("model_start", {"turn": turn + 1})
-            assistant = self.backend.chat(messages, tools=self.registry.schemas())
+            schemas = [
+                schema
+                for schema in self.registry.schemas()
+                if _tool_schema_name(schema) not in self.model_tool_exclusions
+            ]
+            allowed_tool_names = {_tool_schema_name(schema) for schema in schemas}
+            try:
+                assistant = self.backend.chat(messages, tools=schemas)
+            except Exception as exc:
+                self._emit("model_error", {
+                    "turn": turn + 1,
+                    "error": _preview(redact_sensitive_text(str(exc))),
+                })
+                raise ModelCallError(turn + 1, exc) from None
             self._emit("model_end", {
                 "turn": turn + 1,
                 "tool_calls": [call.get("name", "") for call in assistant.get("tool_calls") or []],
@@ -71,8 +106,11 @@ class AgentLoop:
                 return assistant.get("content", "")
 
             for call in tool_calls:
-                tool = self.registry.get(call["name"])
-                if tool is None:
+                name = call["name"]
+                tool = self.registry.get(name) if name in allowed_tool_names else None
+                if name not in allowed_tool_names:
+                    obs = f"错误：工具 {name} 未向当前模型公开"
+                elif tool is None:
                     obs = f"错误：未知工具 {call['name']}"
                 else:
                     try:
@@ -114,10 +152,15 @@ class AgentSession:
         ]
 
     def ask(self, user_task: str) -> str:
+        before = list(self.messages)
         self.messages.append({"role": "user", "content": user_task})
-        answer = self.loop.run_messages(self.messages)
-        self._compact_history()
-        return answer
+        try:
+            answer = self.loop.run_messages(self.messages)
+            self._compact_history()
+            return answer
+        except Exception:
+            self.messages[:] = before
+            raise
 
     def record_finance_turn(self, user_task: str, answer: str) -> None:
         """记录由确定性金融路由生成的问答，不再调用模型。"""
@@ -174,3 +217,7 @@ def _prepare_tool_observation(name: str, text: str, max_chars: int) -> str:
     wrapper_size = len(UNTRUSTED_FINANCE_TOOL_NOTICE) + len(UNTRUSTED_FINANCE_TOOL_END) + 2
     bounded = truncate_observation(text, max(max_chars - wrapper_size, 0))
     return "\n".join((UNTRUSTED_FINANCE_TOOL_NOTICE, bounded, UNTRUSTED_FINANCE_TOOL_END))
+
+
+def _tool_schema_name(schema: dict[str, Any]) -> str:
+    return str(schema.get("function", {}).get("name", ""))

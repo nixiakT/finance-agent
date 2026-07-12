@@ -131,7 +131,7 @@ def _learn_from_history(
 
 finance_route_task_tool = Tool(
     name="finance_route_task",
-    description="根据自然语言金融任务自动选择报告、对比、辩论、回测或自选股简报。",
+    description="离线兼容/故障兜底：根据自然语言任务生成固定金融报告。真实模型做多来源分析时应优先组合具体 finance_* 和 web_* 工具。",
     parameters={
         "type": "object",
         "properties": {"task": {"type": "string", "description": "用户的完整金融研究任务"}},

@@ -24,6 +24,9 @@ from finance.http import client as http_client
 
 
 class DeepSeekBackend:
+    # Fixed reports remain available to FakeBackend and CLI fallback, not the real model.
+    model_tool_exclusions = frozenset({"finance_route_task", "finance_generate_report"})
+
     def __init__(self,
                  api_key: str | None = None,
                  base_url: str | None = None,

@@ -15,6 +15,7 @@ from time import perf_counter
 
 from tools.base import build_default_registry
 from agent.command_catalog import command_completions, completion_meta
+from agent.context import redact_sensitive_text
 from agent.dynamic_commands import DynamicSlashCommands
 from agent.input import InteractiveInput, clean_user_input
 from agent.prompts import SYSTEM_PROMPT
@@ -30,19 +31,20 @@ from agent.ui import (
 
 
 FINANCE_TEXT_HINTS = (
-    "股票", "股价", "行情", "走势", "财报", "估值", "回测", "选股", "辩论",
-    "自选股", "标的", "上市", "港股", "美股", "概念股", "基本面", "技术面",
-    "市盈率", "成交量", "财务", "均线", "智谱", "贵州茅台", "投资", "买多少",
-    "仓位", "组合", "建仓", "模拟投资", "纸面组合", "100万", "一百万",
-    "历史学习", "历史数据中学习", "从历史中学习", "学习预测", "沉淀为skill",
+    "股票", "股价", "行情", "财报", "估值", "选股", "自选股", "港股", "美股",
+    "概念股", "市盈率", "证券", "仓位", "持仓", "建仓", "模拟投资", "纸面组合",
 )
 
 FINANCE_WORD_HINTS = (
-    "quote", "stock", "ticker", "price", "listed", "ipo", "nasdaq", "nyse", "hkex",
-    "spacex", "minimax", "spcx", "nvda", "amd", "aapl", "tsla", "msft",
-    "pe", "eps", "roe", "rsi", "macd", "ma20", "ma60", "portfolio", "allocation",
-    "allocate", "history", "learning",
+    "stock", "ticker", "ipo", "nasdaq", "nyse", "hkex",
 )
+
+FINANCE_COMPANY_HINTS = (
+    "spacex", "minimax", "spcx", "nvda", "amd", "aapl", "tsla", "msft",
+    "goog", "googl", "amzn", "avgo", "orcl", "tsm", "baba", "brk.b",
+)
+
+FINANCE_COMPANY_TEXT_HINTS = ("智谱", "贵州茅台", "腾讯")
 
 
 def build_system_prompt() -> str:
@@ -151,6 +153,10 @@ class TracePrinter:
                 self._emit(render_trace("selected tools", ", ".join(calls), elapsed=elapsed))
             elif payload.get("content_preview"):
                 self._emit(render_trace("model answer", payload["content_preview"], elapsed=elapsed))
+        elif event == "model_error":
+            turn = int(payload.get("turn") or 0)
+            elapsed = _elapsed(self._model_started.pop(turn, None))
+            self._emit(render_trace("model error", str(payload.get("error") or "unknown"), elapsed=elapsed))
         elif event == "tool_start":
             name = str(payload.get("name") or "unknown")
             self._tool_started[name] = perf_counter()
@@ -229,7 +235,7 @@ def make_observer(enabled):
 
 def interactive() -> int:
     from agent.commands import CommandRouter
-    from agent.loop import AgentSession
+    from agent.loop import AgentSession, ModelCallError
     from finance.agent import FinanceResearchAgent
 
     print(render_welcome())
@@ -303,15 +309,16 @@ def interactive() -> int:
             if command in {"exit", "quit"}:
                 print("bye.")
                 return 0
-            if _should_route_finance(task):
-                trace.command("tool", f"finance_route_task {_json_preview({'task': task})}")
-                output = finance.route_task(task)
-                trace.command("tool result", f"finance_route_task -> {_preview(output)}")
-                session.record_finance_turn(task, output)
-                trace.flush()
-                print(output)
-                continue
-            answer = session.ask(task)
+            try:
+                answer = session.ask(task)
+            except ModelCallError as exc:
+                if exc.turn == 1 and _should_route_finance(task):
+                    answer = _run_finance_fallback(task, finance, trace, exc)
+                    session.record_finance_turn(task, answer)
+                else:
+                    trace.flush()
+                    print(_model_failure_message(exc))
+                    continue
             trace.flush()
             print(answer)
     finally:
@@ -369,22 +376,23 @@ def main(argv: list[str] | None = None) -> int:
         finally:
             _close_registry(reg)
 
-    if _should_route_finance(task):
-        trace = TracePrinter(lambda: "compact")
-        from finance.agent import FinanceResearchAgent
+    # 自然语言任务统一进入 Agent；只有首轮模型请求失败时才允许金融固定报告兜底。
+    from agent.loop import ModelCallError
 
-        trace.command("tool", f"finance_route_task {_json_preview({'task': task})}")
-        output = FinanceResearchAgent().route_task(task)
-        trace.command("tool result", f"finance_route_task -> {_preview(output)}")
-        trace.flush()
-        print(output)
-        return 0
-
-    # 真正跑任务：优先用 DeepSeek API；没配 key 时回退到 FakeBackend（离线打通管道）
     trace = TracePrinter(lambda: "compact")
     agent = build_agent(observer=trace.observe)
     try:
-        answer = agent.run(task)
+        try:
+            answer = agent.run(task)
+        except ModelCallError as exc:
+            if exc.turn == 1 and _should_route_finance(task):
+                from finance.agent import FinanceResearchAgent
+
+                answer = _run_finance_fallback(task, FinanceResearchAgent(), trace, exc)
+            else:
+                trace.flush()
+                print(_model_failure_message(exc))
+                return 1
         trace.flush()
         print(answer)
         return 0
@@ -454,6 +462,7 @@ def _split_trace_detail(detail: str) -> tuple[str, str]:
 
 
 def _should_route_finance(task: str) -> bool:
+    """Return whether a first-turn model failure may use the finance fallback."""
     text = task.strip()
     if not text or text.startswith("/"):
         return False
@@ -464,13 +473,57 @@ def _should_route_finance(task: str) -> bool:
     words = set(re.findall(r"[a-z0-9.]+", lowered))
     if words.intersection(FINANCE_WORD_HINTS):
         return True
-    if re.search(r"\b[A-Z]{1,6}(?:\.[A-Z]{1,4})?\b", text) and any(
-        token in text for token in ("分析", "比较", "看看", "查", "今天", "最近", "情况", "走势", "财报")
+    company_mentioned = (
+        bool(words.intersection(FINANCE_COMPANY_HINTS))
+        or any(name in compact for name in FINANCE_COMPANY_TEXT_HINTS)
+    )
+    non_finance_company_context = ("api", "sdk", "gpu", "驱动", "代码", "报错", "配置", "腾讯云")
+    company_research_cues = (
+        "股票", "股价", "行情", "财报", "估值", "分析", "比较", "看看", "查",
+        "今天", "最近", "情况", "怎么样", "走势", "上市", "投资", "买", "仓位", "组合",
+    )
+    if (
+        company_mentioned
+        and not any(token in compact for token in non_finance_company_context)
+        and any(token in compact for token in company_research_cues)
     ):
         return True
-    if any(char.isdigit() for char in text) and any(token in text for token in ("分析", "比较", "看看", "查", "今天", "最近")):
+    code_pattern = r"(?<!\d)(?:(?:[03689]\d{5})(?:\.(?:SS|SZ))?|(?:0\d{4})(?:\.HK)?)(?!\d)"
+    non_finance_context = ("订单", "工单", "课程", "编号", "学号", "邮编", "版本", "端口")
+    if (
+        re.search(code_pattern, text, flags=re.IGNORECASE)
+        and not any(token in compact for token in non_finance_context)
+        and any(
+            token in compact
+            for token in ("分析", "比较", "看看", "查", "今天", "最近", "情况", "怎么样", "质量门禁")
+        )
+    ):
         return True
     return False
+
+
+def _run_finance_fallback(task, finance, trace: TracePrinter, error) -> str:  # noqa: ANN001
+    detail = _model_error_detail(error, 180)
+    print(f"[提示] DeepSeek 首轮请求失败，已使用确定性金融报告兜底：{detail}")
+    trace.command("model fallback", f"turn {error.turn}: {detail}")
+    trace.command("tool", f"finance_route_task {_json_preview({'task': task})}")
+    output = finance.route_task(task)
+    trace.command("tool result", f"finance_route_task -> {_preview(output)}")
+    return output
+
+
+def _model_failure_message(error) -> str:  # noqa: ANN001
+    detail = _model_error_detail(error, 240)
+    if error.turn > 1:
+        return (
+            f"DeepSeek 第 {error.turn} 轮请求失败；此前工具可能已经执行，"
+            f"为避免重复副作用，本次不自动兜底。错误：{detail}"
+        )
+    return f"DeepSeek 首轮请求失败，且当前任务不适用金融固定报告兜底。错误：{detail}"
+
+
+def _model_error_detail(error, limit: int) -> str:  # noqa: ANN001
+    return _preview(redact_sensitive_text(str(error.cause)), limit)
 
 
 def _preview(text: str, limit: int = 180) -> str:
