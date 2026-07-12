@@ -5,7 +5,7 @@ from typing import Any
 
 import pytest
 
-from agent.cli import TracePrinter, _should_route_finance, main
+from agent.cli import TracePrinter, _should_route_finance, build_system_prompt, main
 from agent.commands import CommandRouter
 from agent.context import maybe_compact, truncate_observation
 from agent.loop import AgentLoop, AgentSession
@@ -168,6 +168,15 @@ def test_skills_command_lists_on_demand_skills() -> None:
 
     assert "Skills" in output
     assert "finance-history-learning" in output
+
+
+def test_system_prompt_includes_skill_catalog_descriptions() -> None:
+    prompt = build_system_prompt()
+
+    assert "可用 Skills" in prompt
+    assert "finance-stock-research:" in prompt
+    assert "screenshot-ui-diagnosis:" in prompt
+    assert "界面截图" in prompt
 
 
 def test_mcp_command_reports_server_tools_and_prompts() -> None:
@@ -510,6 +519,39 @@ def test_main_routes_natural_finance_task_deterministically(capsys: Any, monkeyp
     assert "thinking summary" in output
     assert "finance_route_task" in output
     assert "routed finance task: SpaceX 最近情况如何" in output
+
+
+def test_main_sends_image_content_blocks_to_agent(
+    tmp_path: Any,
+    capsys: Any,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    image_path = tmp_path / "sample.png"
+    image_path.write_bytes(
+        b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR"
+        b"\x00\x00\x00\x01\x00\x00\x00\x01\x08\x06\x00\x00\x00"
+        b"\x1f\x15\xc4\x89\x00\x00\x00\nIDATx\x9cc\x00\x01\x00\x00\x05\x00\x01"
+        b"\r\n-\xb4\x00\x00\x00\x00IEND\xaeB`\x82"
+    )
+
+    class VisionAgent:
+        system_prompt = "system with skills"
+        registry = ToolRegistry()
+
+        def run_messages(self, messages: list[dict[str, Any]]) -> str:
+            content = messages[1]["content"]
+            assert messages[0] == {"role": "system", "content": self.system_prompt}
+            assert content[0] == {"type": "text", "text": "描述这张图"}
+            assert content[1]["type"] == "image"
+            assert content[1]["source"]["media_type"] == "image/png"
+            assert content[1]["source"]["data"]
+            return "vision ok"
+
+    monkeypatch.setattr("agent.cli.build_agent", lambda observer=None, registry=None: VisionAgent())
+
+    assert main(["--image", str(image_path), "描述这张图"]) == 0
+
+    assert "vision ok" in capsys.readouterr().out
 
 
 def test_finance_task_router_does_not_capture_general_dev_tasks() -> None:

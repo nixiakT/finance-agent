@@ -98,6 +98,14 @@ def test_skills_are_sorted_by_declared_name_and_read_by_name(tmp_path: Path) -> 
     assert read_skill("alpha-skill", root).body == "# Alpha body"
 
 
+def test_project_domain_screenshot_skill_is_discoverable() -> None:
+    skills = {skill.name: skill for skill in load_skills()}
+
+    assert "screenshot-ui-diagnosis" in skills
+    assert "界面截图" in skills["screenshot-ui-diagnosis"].description
+    assert "glob" in skills["screenshot-ui-diagnosis"].body
+
+
 def test_skill_loader_reports_unknown_and_broken_skills_clearly(tmp_path: Path) -> None:
     root = tmp_path / "skills"
     _write_skill(root, "good", "good-skill")
