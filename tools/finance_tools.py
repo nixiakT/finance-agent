@@ -67,6 +67,68 @@ def _daily_brief(symbols: list[str] | str, period: str = "3mo") -> str:
     return _agent.daily_brief(symbols, period)
 
 
+def _build_paper_portfolio(
+    symbols: list[str] | str,
+    initial_cash: float = 1_000_000,
+    period: str = "1y",
+    max_positions: int = 5,
+    name: str = "default",
+) -> str:
+    return _agent.build_paper_portfolio(symbols, initial_cash, period, max_positions, name)
+
+
+def _rebalance_paper_portfolio(
+    symbols: list[str] | str,
+    period: str = "1y",
+    max_positions: int = 5,
+    name: str = "default",
+) -> str:
+    return _agent.rebalance_paper_portfolio(symbols, period, max_positions, name)
+
+
+def _mark_paper_portfolio(name: str = "default") -> str:
+    return _agent.mark_paper_portfolio(name)
+
+
+def _show_paper_portfolio(name: str = "default") -> str:
+    return _agent.show_paper_portfolio(name)
+
+
+def _sell_paper_holding(
+    symbol: str,
+    shares: float | str = "all",
+    name: str = "default",
+    reason: str = "manual sell",
+) -> str:
+    return _agent.sell_paper_holding(symbol, shares, name, reason)
+
+
+def _paper_trades(name: str = "default", limit: int = 30) -> str:
+    return _agent.paper_trades(name, limit)
+
+
+def _paper_daily_pnl(name: str = "default", limit: int = 30) -> str:
+    return _agent.paper_daily_pnl(name, limit)
+
+
+def _review_paper_portfolio(
+    symbols: list[str] | str = "",
+    period: str = "6mo",
+    name: str = "default",
+) -> str:
+    return _agent.review_paper_portfolio(symbols, period, name)
+
+
+def _learn_from_history(
+    symbol: str,
+    period: str = "2y",
+    horizon_days: int = 20,
+    record: bool = True,
+    update_skill: bool = True,
+) -> str:
+    return _agent.learn_from_history(symbol, period, horizon_days, record, update_skill)
+
+
 finance_route_task_tool = Tool(
     name="finance_route_task",
     description="根据自然语言金融任务自动选择报告、对比、辩论、回测或自选股简报。",
@@ -130,7 +192,7 @@ finance_get_news_tool = Tool(
     description="获取股票相关新闻摘要和链接。",
     parameters={
         "type": "object",
-        "properties": {"symbol": {"type": "string"}, "limit": {"type": "integer"}},
+        "properties": {"symbol": {"type": "string"}, "limit": {"type": "integer", "minimum": 0}},
         "required": ["symbol"],
     },
     run=_get_news,
@@ -244,6 +306,139 @@ finance_daily_brief_tool = Tool(
     run=_daily_brief,
 )
 
+finance_build_paper_portfolio_tool = Tool(
+    name="finance_build_paper_portfolio",
+    description="用候选股票池和给定资金构建纸面模拟投资组合，输出买入数量、仓位、评分和风险提示；不会真实下单。",
+    parameters={
+        "type": "object",
+        "properties": {
+            "symbols": {
+                "oneOf": [
+                    {"type": "array", "items": {"type": "string"}},
+                    {"type": "string"},
+                ]
+            },
+            "initial_cash": {"type": "number", "description": "初始资金，默认 1000000"},
+            "period": {"type": "string"},
+            "max_positions": {"type": "integer"},
+            "name": {"type": "string", "description": "本地模拟账户名称"},
+        },
+        "required": ["symbols"],
+    },
+    run=_build_paper_portfolio,
+)
+
+finance_rebalance_paper_portfolio_tool = Tool(
+    name="finance_rebalance_paper_portfolio",
+    description="根据当前候选股票池重新计算纸面组合仓位，并覆盖本地模拟账户持仓；不会真实下单。",
+    parameters={
+        "type": "object",
+        "properties": {
+            "symbols": {
+                "oneOf": [
+                    {"type": "array", "items": {"type": "string"}},
+                    {"type": "string"},
+                ]
+            },
+            "period": {"type": "string"},
+            "max_positions": {"type": "integer"},
+            "name": {"type": "string"},
+        },
+        "required": ["symbols"],
+    },
+    run=_rebalance_paper_portfolio,
+)
+
+finance_mark_paper_portfolio_tool = Tool(
+    name="finance_mark_paper_portfolio",
+    description="按最新行情给本地纸面组合估值，并追加一条每日净值记录。",
+    parameters={"type": "object", "properties": {"name": {"type": "string"}}},
+    run=_mark_paper_portfolio,
+)
+
+finance_show_paper_portfolio_tool = Tool(
+    name="finance_show_paper_portfolio",
+    description="查看本地纸面组合账户、持仓、收益和最近记录。",
+    parameters={"type": "object", "properties": {"name": {"type": "string"}}},
+    run=_show_paper_portfolio,
+)
+
+finance_sell_paper_holding_tool = Tool(
+    name="finance_sell_paper_holding",
+    description="在纸面组合中模拟卖出某只股票，记录 SELL 流水、卖出价格、数量、实现盈亏和理由；不会真实下单。",
+    parameters={
+        "type": "object",
+        "properties": {
+            "symbol": {"type": "string"},
+            "shares": {
+                "oneOf": [{"type": "number"}, {"type": "string"}],
+                "description": "卖出股数，或 all",
+            },
+            "name": {"type": "string"},
+            "reason": {"type": "string"},
+        },
+        "required": ["symbol"],
+    },
+    run=_sell_paper_holding,
+)
+
+finance_paper_trades_tool = Tool(
+    name="finance_paper_trades",
+    description="查看纸面组合交易流水，包含 BUY/SELL、数量、价格、金额和实现盈亏。",
+    parameters={
+        "type": "object",
+        "properties": {"name": {"type": "string"}, "limit": {"type": "integer"}},
+    },
+    run=_paper_trades,
+)
+
+finance_paper_daily_pnl_tool = Tool(
+    name="finance_paper_daily_pnl",
+    description="查看纸面组合按日汇总的买入额、卖出额、已实现盈亏、期末净值和净值变化。",
+    parameters={
+        "type": "object",
+        "properties": {"name": {"type": "string"}, "limit": {"type": "integer"}},
+    },
+    run=_paper_daily_pnl,
+)
+
+finance_review_paper_portfolio_tool = Tool(
+    name="finance_review_paper_portfolio",
+    description="只读诊断纸面组合：解释当前持仓质量、相对强弱、数据置信度，并给出替换候选；不会改仓。",
+    parameters={
+        "type": "object",
+        "properties": {
+            "symbols": {
+                "oneOf": [
+                    {"type": "array", "items": {"type": "string"}},
+                    {"type": "string"},
+                ],
+                "description": "可选候选池，如 AAPL MSFT NVDA GOOGL AVGO",
+            },
+            "period": {"type": "string"},
+            "name": {"type": "string"},
+        },
+    },
+    run=_review_paper_portfolio,
+)
+
+finance_learn_from_history_tool = Tool(
+    name="finance_learn_from_history",
+    description="从股票历史价格中做 walk-forward 可解释学习，生成方向、置信度、保存预测账本，并更新 finance-history-learning Skill。",
+    parameters={
+        "type": "object",
+        "properties": {
+            "symbol": {"type": "string"},
+            "period": {"type": "string", "description": "学习历史区间，如 2y、5y"},
+            "horizon_days": {"type": "integer", "description": "预测未来多少天，默认 20"},
+            "record": {"type": "boolean", "description": "是否写入预测账本"},
+            "update_skill": {"type": "boolean", "description": "是否更新 skills/finance-history-learning/SKILL.md"},
+        },
+        "required": ["symbol"],
+    },
+    run=_learn_from_history,
+)
+
 
 finance_tools = [
     finance_route_task_tool,
@@ -259,4 +454,13 @@ finance_tools = [
     finance_debate_stocks_tool,
     finance_backtest_strategy_tool,
     finance_daily_brief_tool,
+    finance_build_paper_portfolio_tool,
+    finance_rebalance_paper_portfolio_tool,
+    finance_mark_paper_portfolio_tool,
+    finance_show_paper_portfolio_tool,
+    finance_sell_paper_holding_tool,
+    finance_paper_trades_tool,
+    finance_paper_daily_pnl_tool,
+    finance_review_paper_portfolio_tool,
+    finance_learn_from_history_tool,
 ]

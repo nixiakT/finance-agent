@@ -128,11 +128,17 @@ def _format_financials(financials: Financials) -> str:
         ("毛利", financials.gross_profit, "big"),
         ("净利润", financials.net_income, "big"),
         ("自由现金流", financials.free_cash_flow, "big"),
-        ("资产负债率/债务权益比", financials.debt_to_equity, "number"),
+        ("债务/权益比（%）", financials.debt_to_equity, "leverage"),
         ("ROE", _ratio_to_pct(financials.return_on_equity), "percent"),
         ("利润率", _ratio_to_pct(financials.profit_margin), "percent"),
     ]
-    lines = [f"- 数据来源: {financials.source or '未知'}，时间: {financials.as_of or '未知'}"]
+    lines = [
+        f"- 数据来源: {financials.source or '未知'}",
+        f"- 报告期: {financials.as_of or '未知'}",
+        f"- 口径: {financials.period_type or '未知'}",
+        f"- 财务币种: {financials.currency or '未知'}",
+        f"- 抓取时间: {financials.fetched_at or '未知'}",
+    ]
     for label, value, kind in fields:
         if value is None:
             lines.append(f"- {label}: 缺失")
@@ -140,9 +146,33 @@ def _format_financials(financials: Financials) -> str:
             lines.append(f"- {label}: {_fmt_big(value)}")
         elif kind == "percent":
             lines.append(f"- {label}: {_fmt_percent(value)}")
+        elif kind == "leverage" and float(value) >= 1_000_000:
+            lines.append(f"- {label}: 极高（负权益或负债不低于资产）")
         else:
             lines.append(f"- {label}: {_fmt_number(value)}")
+    if financials.field_sources:
+        provenance = "、".join(
+            f"{_financial_field_label(name)}={source}"
+            for name, source in sorted(financials.field_sources.items())
+        )
+        lines.append(f"- 字段来源: {provenance}")
     return "\n".join(lines)
+
+
+def _financial_field_label(name: str) -> str:
+    return {
+        "market_cap": "市值",
+        "pe_ratio": "PE",
+        "forward_pe": "Forward PE",
+        "eps": "EPS",
+        "revenue": "营收",
+        "gross_profit": "毛利",
+        "net_income": "净利润",
+        "free_cash_flow": "自由现金流",
+        "debt_to_equity": "杠杆",
+        "return_on_equity": "ROE",
+        "profit_margin": "利润率",
+    }.get(name, name)
 
 
 def _format_news(news: list[NewsItem]) -> str:

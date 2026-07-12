@@ -5,6 +5,7 @@ import json
 import os
 import shlex
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Callable
 from urllib.parse import urlsplit
 
@@ -22,8 +23,9 @@ from finance.predictions import (
 )
 from finance.web import web_fetch, web_search
 from agent.ui import current_lang
+from skills.loader import load_skills
 from scheduler.jobs import add_job, list_jobs, render_jobs, run_due_jobs
-from tools.security import safety_summary
+from tools.security import guard_write, safety_summary
 from tools.base import ToolRegistry
 from wechat import connector_status, send_markdown, send_text
 
@@ -35,7 +37,8 @@ class CommandResult:
     exit: bool = False
     clear: bool = False
     selfcheck: bool = False
-    think: bool | None = None
+    compact: bool = False
+    think: str | None = None
 
 
 class CommandRouter:
@@ -49,7 +52,7 @@ class CommandRouter:
         self.finance = finance_agent or FinanceResearchAgent()
         self.trace = trace
 
-    def handle(self, raw: str, think_enabled: bool = False) -> CommandResult:
+    def handle(self, raw: str, think_enabled: str | bool = False) -> CommandResult:
         text = raw.strip()
         if not text.startswith("/"):
             return CommandResult(False)
@@ -66,6 +69,8 @@ class CommandRouter:
             return CommandResult(True, exit=True)
         if command == "/clear":
             return CommandResult(True, clear=True, output=_msg("Session context cleared.", "已清空当前会话上下文。"))
+        if command == "/compact":
+            return CommandResult(True, compact=True)
         if command == "/selfcheck":
             return CommandResult(True, selfcheck=True)
         if command == "/think":
@@ -74,6 +79,8 @@ class CommandRouter:
             return self._lang(args)
         if command == "/tools":
             return CommandResult(True, self._tools())
+        if command == "/skills":
+            return CommandResult(True, self._skills())
         if command == "/status":
             return CommandResult(True, self._status(think_enabled))
         if command == "/security":
@@ -92,6 +99,10 @@ class CommandRouter:
             return CommandResult(True, self._predict(args))
         if command == "/schedule":
             return CommandResult(True, self._schedule(args))
+        if command == "/portfolio":
+            return CommandResult(True, self._portfolio(args))
+        if command in {"/learn-history", "/learn"}:
+            return CommandResult(True, self._learn_history(args))
         if command == "/sources":
             return CommandResult(True, self._sources())
         if command == "/search":
@@ -118,6 +129,7 @@ class CommandRouter:
             "/debate": self._debate,
             "/backtest": self._backtest,
             "/brief": self._brief,
+            "/export-report": self._export_report,
         }
         if command in finance_commands:
             try:
@@ -156,7 +168,15 @@ class CommandRouter:
 
     def _news(self, args: list[str]) -> str:
         symbol = _require_arg(args, "/news AAPL [limit]")
-        limit = int(args[1]) if len(args) > 1 and args[1].isdigit() else 5
+        if len(args) > 1:
+            try:
+                limit = int(args[1])
+            except ValueError as exc:
+                raise ValueError("用法：/news AAPL [非负整数 limit]") from exc
+            if limit < 0:
+                raise ValueError("用法：/news AAPL [非负整数 limit]")
+        else:
+            limit = 5
         self._trace_tool("finance_get_news", {"symbol": symbol, "limit": limit})
         return self._with_result_trace("finance_get_news", self.finance.get_news(symbol, limit))
 
@@ -171,6 +191,20 @@ class CommandRouter:
         period = args[1] if len(args) > 1 else "1y"
         self._trace_tool("finance_generate_report", {"symbol": symbol, "period": period})
         return self._with_result_trace("finance_generate_report", self.finance.generate_report(symbol, period))
+
+    def _export_report(self, args: list[str]) -> str:
+        symbol = _require_arg(args, "/export-report AAPL [period] [reports/aapl.md]")
+        period = args[1] if len(args) > 1 else "1y"
+        output_path = args[2] if len(args) > 2 else f"reports/{symbol.lower()}-{period}.md"
+        self._trace_tool("finance_generate_report", {"symbol": symbol, "period": period})
+        report = self.finance.generate_report(symbol, period)
+        resolved = guard_write(output_path, report)
+        resolved.write_text(report, encoding="utf-8")
+        try:
+            display_path = str(resolved.relative_to(Path.cwd()))
+        except ValueError:
+            display_path = str(resolved)
+        return self._with_result_trace("finance_generate_report", f"研究报告已保存到: {display_path}")
 
     def _quality(self, args: list[str]) -> str:
         symbol = _require_arg(args, "/quality AAPL [period]")
@@ -223,19 +257,41 @@ class CommandRouter:
         names = self.registry.names()
         return "已注册工具：\n" + "\n".join(f"- {name}" for name in names)
 
-    def _status(self, think_enabled: bool) -> str:
+    def _skills(self) -> str:
+        try:
+            skills = load_skills()
+        except Exception as exc:  # noqa: BLE001 - surface one broken project Skill clearly
+            return _msg(f"Skills failed to load: {exc}", f"Skills 加载失败：{exc}")
+        if not skills:
+            return _msg("Skills: none discovered.", "Skills：未发现项目 Skill。")
+        title = _msg("Skills (loaded on demand):", "Skills（按需加载）：")
+        return title + "\n" + "\n".join(
+            f"- /{skill.name}: {skill.description}" for skill in skills
+        )
+
+    def _status(self, think_enabled: str | bool) -> str:
         diagnostics = self.finance.provider.diagnostics()
         enabled_sources = [row["name"] for row in diagnostics if row.get("status") == "enabled"]
+        try:
+            skill_count = len(load_skills())
+        except Exception:
+            skill_count = 0
+        statuses = self.registry.mcp_statuses()
+        connected_mcp = sum(row.get("status") == "connected" for row in statuses)
+        mcp_summary = f"{connected_mcp}/{len(statuses)}" if statuses else "0/0"
+        think_label = _think_label(think_enabled)
         if current_lang() == "en":
             return "\n".join([
                 "Finance Agent status:",
                 f"- Model: {os.environ.get('DEEPSEEK_MODEL', 'not configured')}",
                 f"- Base URL: {_safe_base_url(os.environ.get('DEEPSEEK_BASE_URL', ''))}",
                 f"- Tools: {len(self.registry)}",
+                f"- Skills: {skill_count} (on demand)",
                 f"- MCP tools: {', '.join(self._mcp_tool_names()) or 'not connected'}",
+                f"- MCP servers: {mcp_summary}",
                 f"- Proxy: {proxy_label()}",
                 f"- WeChat: {_wechat_mode_label()}",
-                f"- thinking: {'on' if think_enabled else 'off'} (default on; shows time/elapsed/tool summaries)",
+                f"- thinking: {think_label} (compact by default; use /think on for details)",
                 f"- Data sources: {', '.join(enabled_sources) if enabled_sources else 'no real source enabled'}",
                 "- License: MIT",
                 "- Boundary: research only, no auto trading",
@@ -245,10 +301,12 @@ class CommandRouter:
             f"- 模型: {os.environ.get('DEEPSEEK_MODEL', '未配置')}",
             f"- Base URL: {_safe_base_url(os.environ.get('DEEPSEEK_BASE_URL', ''))}",
             f"- 工具数: {len(self.registry)}",
+            f"- Skills: {skill_count}（按需加载）",
             f"- MCP 工具: {', '.join(self._mcp_tool_names()) or '未接入'}",
+            f"- MCP 服务: {mcp_summary}",
             f"- Proxy: {proxy_label()}",
             f"- WeChat: {_wechat_mode_label()}",
-            f"- thinking: {'on' if think_enabled else 'off'}（默认 on，展示时间/耗时/工具摘要）",
+            f"- thinking: {think_label}（默认 compact；/think on 展开详情）",
             f"- 数据源: {', '.join(enabled_sources) if enabled_sources else '无可用真实数据源'}",
             "- License: MIT",
             "- 边界: research only, no auto trading",
@@ -256,10 +314,26 @@ class CommandRouter:
 
     def _mcp(self) -> str:
         names = self._mcp_tool_names()
-        if not names:
-            return _msg("MCP: no registered MCP tools found.", "MCP: 未发现已注册 MCP 工具。")
-        title = _msg("MCP tools:", "MCP 已接入工具：")
-        return title + "\n" + "\n".join(f"- {name}" for name in names)
+        statuses = self.registry.mcp_statuses()
+        prompts = self.registry.mcp_prompts()
+        if not names and not statuses and not prompts:
+            return _msg("MCP: no configured servers, tools, or prompts.", "MCP：未配置服务、工具或 prompt。")
+        lines = [_msg("MCP runtime:", "MCP 运行状态：")]
+        if statuses:
+            lines.append(_msg("Servers:", "服务："))
+            for row in statuses:
+                detail = f" - {row.get('detail')}" if row.get("detail") else ""
+                lines.append(f"- {row.get('name')}: {row.get('status')}{detail}")
+        if names:
+            lines.append(_msg("Tools:", "工具："))
+            lines.extend(f"- {name}" for name in names)
+        if prompts:
+            lines.append(_msg("Prompt commands:", "Prompt 命令："))
+            lines.extend(
+                f"- /mcp:{row.get('server')}:{row.get('name')}: {row.get('description', '')}".rstrip()
+                for row in prompts
+            )
+        return "\n".join(lines)
 
     def _mcp_tool_names(self) -> list[str]:
         return [name for name in self.registry.names() if name.startswith("mcp__")]
@@ -442,6 +516,12 @@ class CommandRouter:
             self._trace_tool("schedule_wechat_message", {"message": message})
             job = add_job("wechat_message", {"message": message}, 1440)
             return self._with_result_trace("schedule_wechat_message", f"Scheduled {job.id} next={job.next_run_at}")
+        if action == "portfolio":
+            name = args[1] if len(args) > 1 else "default"
+            interval = int(args[2]) if len(args) > 2 and args[2].isdigit() else 1440
+            self._trace_tool("schedule_portfolio_mark", {"name": name, "interval_minutes": interval})
+            job = add_job("wechat_portfolio_mark", {"name": name}, interval)
+            return self._with_result_trace("schedule_portfolio_mark", f"Scheduled {job.id} next={job.next_run_at}")
         if action == "run":
             self._trace_tool("schedule_run_due", {})
             results = run_due_jobs(self._run_scheduled_job)
@@ -451,7 +531,94 @@ class CommandRouter:
             for job, result in results:
                 lines.append(f"- {job.id} {job.kind}: {result}")
             return self._with_result_trace("schedule_run_due", "\n".join(lines))
-        return "用法：/schedule list | /schedule brief AAPL,MSFT,NVDA [interval_minutes] | /schedule message <content> | /schedule run"
+        return "用法：/schedule list | /schedule brief AAPL,MSFT,NVDA [interval_minutes] | /schedule portfolio [name] [interval_minutes] | /schedule message <content> | /schedule run"
+
+    def _portfolio(self, args: list[str]) -> str:
+        if not args or args[0].lower() in {"status", "show", "list"}:
+            name = args[1] if len(args) > 1 else "default"
+            self._trace_tool("finance_show_paper_portfolio", {"name": name})
+            return self._with_result_trace("finance_show_paper_portfolio", self.finance.show_paper_portfolio(name))
+        action = args[0].lower()
+        if action == "trades":
+            limit = int(args[1]) if len(args) > 1 and args[1].isdigit() else 30
+            self._trace_tool("finance_paper_trades", {"name": "default", "limit": limit})
+            return self._with_result_trace("finance_paper_trades", self.finance.paper_trades("default", limit))
+        if action in {"pnl", "daily", "daily-pnl"}:
+            limit = int(args[1]) if len(args) > 1 and args[1].isdigit() else 30
+            self._trace_tool("finance_paper_daily_pnl", {"name": "default", "limit": limit})
+            return self._with_result_trace("finance_paper_daily_pnl", self.finance.paper_daily_pnl("default", limit))
+        if action in {"review", "diagnose"}:
+            symbols = args[1:]
+            self._trace_tool("finance_review_paper_portfolio", {"symbols": symbols, "period": "6mo"})
+            return self._with_result_trace(
+                "finance_review_paper_portfolio",
+                self.finance.review_paper_portfolio(symbols, "6mo", "default"),
+            )
+        if action in {"init", "build"}:
+            cash = 1_000_000.0
+            symbols_start = 1
+            if len(args) > 1 and _is_number(args[1]):
+                cash = float(args[1])
+                symbols_start = 2
+            symbols = args[symbols_start:] or ["AAPL", "MSFT", "NVDA", "AMD", "GOOGL"]
+            self._trace_tool("finance_build_paper_portfolio", {
+                "symbols": symbols,
+                "initial_cash": cash,
+                "period": "1y",
+            })
+            return self._with_result_trace(
+                "finance_build_paper_portfolio",
+                self.finance.build_paper_portfolio(symbols, cash, "1y"),
+            )
+        if action in {"mark", "update"}:
+            name = args[1] if len(args) > 1 else "default"
+            self._trace_tool("finance_mark_paper_portfolio", {"name": name})
+            return self._with_result_trace("finance_mark_paper_portfolio", self.finance.mark_paper_portfolio(name))
+        if action in {"rebalance", "rebuild"}:
+            symbols = args[1:] or ["AAPL", "MSFT", "NVDA", "AMD", "GOOGL"]
+            self._trace_tool("finance_rebalance_paper_portfolio", {"symbols": symbols, "period": "1y"})
+            return self._with_result_trace(
+                "finance_rebalance_paper_portfolio",
+                self.finance.rebalance_paper_portfolio(symbols, "1y"),
+            )
+        if action == "sell":
+            if len(args) < 2:
+                return "用法：/portfolio sell AAPL [shares|all] [reason]"
+            symbol = args[1]
+            shares: float | str = "all"
+            reason_start = 2
+            if len(args) > 2 and (args[2].lower() == "all" or _is_number(args[2])):
+                shares = args[2]
+                reason_start = 3
+            if isinstance(shares, str) and _is_number(shares):
+                shares = float(shares)
+            reason = " ".join(args[reason_start:]).strip() or "manual sell"
+            self._trace_tool("finance_sell_paper_holding", {"symbol": symbol, "shares": shares, "reason": reason})
+            return self._with_result_trace(
+                "finance_sell_paper_holding",
+                self.finance.sell_paper_holding(symbol, shares, "default", reason),
+            )
+        return (
+            "用法：/portfolio init [cash] [symbols...] | /portfolio status [name] | "
+            "/portfolio mark [name] | /portfolio sell AAPL [shares|all] [reason] | "
+            "/portfolio trades [limit] | /portfolio pnl [limit] | /portfolio review [symbols...] | /portfolio rebalance [symbols...]"
+        )
+
+    def _learn_history(self, args: list[str]) -> str:
+        symbol = _require_arg(args, "/learn-history AAPL [period] [horizon_days]")
+        period = args[1] if len(args) > 1 else "2y"
+        horizon = int(args[2]) if len(args) > 2 and args[2].isdigit() else 20
+        self._trace_tool("finance_learn_from_history", {
+            "symbol": symbol,
+            "period": period,
+            "horizon_days": horizon,
+            "record": True,
+            "update_skill": True,
+        })
+        return self._with_result_trace(
+            "finance_learn_from_history",
+            self.finance.learn_from_history(symbol, period, horizon, True, True),
+        )
 
     def _run_scheduled_job(self, job) -> str:  # noqa: ANN001
         if job.kind == "wechat_brief":
@@ -459,6 +626,9 @@ class CommandRouter:
             return send_markdown(brief, title="Finance Agent Brief").status
         if job.kind == "wechat_message":
             return send_text(job.payload.get("message", ""), title="Finance Agent").status
+        if job.kind == "wechat_portfolio_mark":
+            report = self.finance.mark_paper_portfolio(job.payload.get("name", "default"))
+            return send_markdown(report, title="Finance Agent Portfolio").status
         return f"unsupported job kind: {job.kind}"
 
     def _sources(self) -> str:
@@ -481,19 +651,27 @@ class CommandRouter:
         self._trace_tool("web_fetch", {"url": url})
         return self._with_result_trace("web_fetch", web_fetch(url))
 
-    def _think(self, args: list[str], think_enabled: bool) -> CommandResult:
+    def _think(self, args: list[str], think_enabled: str | bool) -> CommandResult:
         if not args:
-            state = "on" if think_enabled else "off"
+            state = _think_label(think_enabled)
             return CommandResult(True, _msg(f"thinking state: {state}", f"thinking 当前状态：{state}"))
         value = args[0].lower()
         if value in {"on", "true", "1"}:
             return CommandResult(True, _msg(
-                "thinking enabled: timestamps, elapsed time, model turns, tool calls and result previews are shown.",
+                "thinking expanded: timestamps, elapsed time, model turns, tool calls and result previews are shown.",
                 "thinking 已开启：会显示时间、耗时、模型回合、工具调用和结果摘要。",
-            ), think=True)
+            ), think="on")
+        if value in {"compact", "summary", "folded"}:
+            return CommandResult(True, _msg(
+                "thinking compact: detailed trace is folded into a one-line summary. Use /trace after a task to expand the last trace.",
+                "thinking compact：详细轨迹会收起成一行摘要。任务后输入 /trace 可展开上一轮轨迹。",
+            ), think="compact")
         if value in {"off", "false", "0"}:
-            return CommandResult(True, _msg("thinking disabled.", "thinking 已关闭。"), think=False)
-        return CommandResult(True, _msg("Usage: /think on or /think off", "用法：/think on 或 /think off"))
+            return CommandResult(True, _msg("thinking disabled.", "thinking 已关闭。"), think="off")
+        return CommandResult(True, _msg(
+            "Usage: /think on | /think compact | /think off",
+            "用法：/think on | /think compact | /think off",
+        ))
 
     def _lang(self, args: list[str]) -> CommandResult:
         if not args:
@@ -559,6 +737,15 @@ def _safe_base_url(value: str) -> str:
     except ValueError:
         port = ""
     return f"{parsed.scheme}://{host}{port}{parsed.path.rstrip('/')}"
+
+
+def _think_label(value: str | bool) -> str:
+    if value is True:
+        return "on"
+    if value is False or value is None:
+        return "off"
+    normalized = str(value).lower()
+    return normalized if normalized in {"on", "compact", "off"} else "compact"
 
 
 def _msg(en: str, zh: str) -> str:

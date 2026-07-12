@@ -5,10 +5,10 @@ from typing import Any
 
 import pytest
 
-from agent.cli import _should_route_finance, main
+from agent.cli import TracePrinter, _should_route_finance, main
 from agent.commands import CommandRouter
 from agent.context import maybe_compact, truncate_observation
-from agent.loop import AgentLoop
+from agent.loop import AgentLoop, AgentSession
 from agent.ui import render_trace
 from finance.data import ProviderError
 from finance.evolution import add_memory, extract_learning, list_memories
@@ -34,8 +34,9 @@ def test_maybe_compact_preserves_system_and_recent_messages() -> None:
     compacted = maybe_compact(messages, budget=100)
 
     assert compacted[0] == {"role": "system", "content": "system"}
-    assert compacted[1]["role"] == "system"
+    assert compacted[1]["role"] == "assistant"
     assert "compacted" in compacted[1]["content"]
+    assert sum(message["role"] == "system" for message in compacted) == 1
     assert len(compacted) < len(messages)
 
 
@@ -145,6 +146,7 @@ def test_status_command_reports_runtime_summary(monkeypatch: pytest.MonkeyPatch)
         provider = Provider()
 
     router = CommandRouter(ToolRegistry(), finance_agent=Finance())  # type: ignore[arg-type]
+    monkeypatch.setenv("FINANCE_AGENT_LANG", "zh")
     monkeypatch.setenv("DEEPSEEK_BASE_URL", "https://user:pass@example.com:8443/v1?token=secret")
 
     output = router.handle("/status", think_enabled=True).output
@@ -153,9 +155,73 @@ def test_status_command_reports_runtime_summary(monkeypatch: pytest.MonkeyPatch)
     assert "thinking: on" in output
     assert "License: MIT" in output
     assert "STATIC" in output
+    assert "Skills:" in output
     assert "https://example.com:8443/v1" in output
     assert "token=secret" not in output
     assert "user:pass" not in output
+
+
+def test_skills_command_lists_on_demand_skills() -> None:
+    router = CommandRouter(ToolRegistry(), finance_agent=StatusFinance())  # type: ignore[arg-type]
+
+    output = router.handle("/skills").output
+
+    assert "Skills" in output
+    assert "finance-history-learning" in output
+
+
+def test_mcp_command_reports_server_tools_and_prompts() -> None:
+    class Runtime:
+        def statuses(self):  # noqa: ANN201
+            return [{"name": "research", "status": "connected", "detail": "2 tools"}]
+
+        def prompt_catalog(self):  # noqa: ANN201
+            return [{"server": "research", "name": "daily", "description": "Daily review", "arguments": []}]
+
+        def close(self) -> None:
+            pass
+
+    registry = ToolRegistry()
+    registry.register(Tool("mcp__research__search", "", {"type": "object", "properties": {}}, lambda: ""))
+    registry.manage(Runtime())
+    router = CommandRouter(registry, finance_agent=StatusFinance())  # type: ignore[arg-type]
+
+    output = router.handle("/mcp").output
+
+    assert "research: connected" in output
+    assert "mcp__research__search" in output
+    assert "/mcp:research:daily" in output
+
+
+def test_compact_command_requests_session_compaction() -> None:
+    router = CommandRouter(ToolRegistry(), finance_agent=StatusFinance())  # type: ignore[arg-type]
+
+    result = router.handle("/compact")
+
+    assert result.handled
+    assert result.compact
+
+
+def test_agent_session_compact_uses_backend_summary() -> None:
+    backend = SummarizingBackend()
+    loop = AgentLoop(backend=backend, registry=ToolRegistry(), system_prompt="system")
+    session = AgentSession(loop)
+    session.messages = [
+        {"role": "system", "content": "system"},
+        {"role": "user", "content": "old user request"},
+        {"role": "assistant", "content": "old assistant answer"},
+        {"role": "tool", "name": "web_fetch", "content": "old tool observation"},
+        {"role": "user", "content": "latest user request"},
+    ]
+
+    output = session.compact()
+
+    assert "已压缩" in output
+    assert backend.summary_requests == 1
+    assert session.messages[0] == {"role": "system", "content": "system"}
+    assert "model generated handoff summary" in session.messages[1]["content"]
+    assert "latest user request" in [message.get("content") for message in session.messages]
+    assert len(session.messages) < 5
 
 
 def test_proxy_command_can_set_and_report_proxy(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -264,9 +330,52 @@ def test_schedule_command_creates_and_runs_wechat_message(tmp_path: Any, monkeyp
     router = CommandRouter(ToolRegistry(), finance_agent=StatusFinance())  # type: ignore[arg-type]
     created = router.handle("/schedule message hello").output
     ran = router.handle("/schedule run").output
+    portfolio = router.handle("/schedule portfolio default").output
 
     assert "Scheduled" in created
     assert "Scheduled jobs executed" in ran
+    assert "Scheduled" in portfolio
+
+
+def test_portfolio_command_builds_and_marks_paper_account(tmp_path: Any, monkeypatch: pytest.MonkeyPatch) -> None:
+    import finance.paper_portfolio as portfolio
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(portfolio, "PORTFOLIO_DIR", tmp_path / ".finance_agent")
+
+    router = CommandRouter(ToolRegistry(), finance_agent=PortfolioFinance())  # type: ignore[arg-type]
+    built = router.handle("/portfolio init 1000000 AAPL MSFT NVDA").output
+    marked = router.handle("/portfolio mark").output
+    sold = router.handle("/portfolio sell AAPL 止盈").output
+    trades = router.handle("/portfolio trades").output
+    pnl = router.handle("/portfolio pnl").output
+    review = router.handle("/portfolio review AAPL MSFT NVDA GOOGL").output
+
+    assert "# 模拟投资账户" in built
+    assert "候选评分" in built
+    assert "累计收益" in marked
+    assert "SELL" in sold
+    assert "止盈" in sold
+    assert "纸面交易流水" in trades
+    assert "每日买卖盈亏" in pnl
+    assert "纸面组合诊断" in review
+
+
+def test_learn_history_command_updates_skill_and_prediction(tmp_path: Any, monkeypatch: pytest.MonkeyPatch) -> None:
+    import finance.history_learning as history_learning
+    import finance.predictions as predictions
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(history_learning, "LEARNING_PATH", tmp_path / ".finance_agent" / "history_learning.jsonl")
+    monkeypatch.setattr(history_learning, "SKILL_PATH", tmp_path / "skills" / "finance-history-learning" / "SKILL.md")
+    monkeypatch.setattr(predictions, "PREDICTION_PATH", tmp_path / ".finance_agent" / "predictions.jsonl")
+
+    router = CommandRouter(ToolRegistry(), finance_agent=PortfolioFinance())  # type: ignore[arg-type]
+    output = router.handle("/learn-history AAPL 2y 20").output
+
+    assert "历史学习预测" in output
+    assert "Skill updated" in output
+    assert "Prediction recorded" in output
 
 
 def test_resolve_command_uses_finance_resolver() -> None:
@@ -306,12 +415,58 @@ def test_quality_command_uses_finance_quality_screen() -> None:
     assert output == "quality AAPL 3mo"
 
 
+def test_export_report_command_writes_markdown_file(tmp_path: Any, monkeypatch: pytest.MonkeyPatch) -> None:
+    import agent.commands as commands
+
+    class Finance:
+        def generate_report(self, symbol: str, period: str = "1y") -> str:
+            return f"# Report\n\nsymbol={symbol}\nperiod={period}\n"
+
+    def fake_guard_write(path: str, content: str):  # noqa: ANN001
+        resolved = tmp_path / path
+        resolved.parent.mkdir(parents=True, exist_ok=True)
+        return resolved
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(commands, "guard_write", fake_guard_write)
+    router = CommandRouter(ToolRegistry(), finance_agent=Finance())  # type: ignore[arg-type]
+
+    output = router.handle("/export-report AAPL 3mo reports/aapl.md").output
+
+    report_path = tmp_path / "reports" / "aapl.md"
+    assert report_path.read_text(encoding="utf-8") == "# Report\n\nsymbol=AAPL\nperiod=3mo\n"
+    assert "reports/aapl.md" in output
+
+
 def test_render_trace_includes_timestamp_and_elapsed() -> None:
     output = render_trace("tool result finance_get_quote", "AAPL -> ok", elapsed=1.234, timestamp="09:08:07")
 
     assert "thinking 09:08:07 +1.23s" in output
     assert "tool result finance_get_quote" in output
     assert "AAPL -> ok" in output
+
+
+def test_trace_printer_compact_mode_summarizes_without_detail(capsys: Any) -> None:
+    printer = TracePrinter(lambda: "compact")
+
+    printer.command("tool", 'finance_get_quote {"symbol":"AAPL"}')
+    printer.command("tool result", "finance_get_quote -> ok")
+    printer.flush()
+
+    output = capsys.readouterr().out
+    assert "thinking summary" in output
+    assert "1 tool" in output
+    assert "finance_get_quote" in output
+    assert '{"symbol":"AAPL"}' not in output
+
+
+def test_think_command_accepts_compact_mode() -> None:
+    router = CommandRouter(ToolRegistry(), finance_agent=StatusFinance())  # type: ignore[arg-type]
+
+    result = router.handle("/think compact", think_enabled="on")
+
+    assert result.think == "compact"
+    assert "compact" in result.output
 
 
 def test_main_handles_single_shot_slash_command(capsys: Any) -> None:
@@ -334,9 +489,9 @@ def test_main_handles_single_shot_slash_command_with_args(capsys: Any, monkeypat
 
     assert "搜索: 智谱 02513 股票" in output
     assert "02513" in output
-    assert "thinking" in output
-    assert "tool web_search" in output
-    assert "tool result web_search" in output
+    assert "thinking summary" in output
+    assert "web_search" in output
+    assert "tool result web_search" not in output
 
 
 def test_main_routes_natural_finance_task_deterministically(capsys: Any, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -352,12 +507,14 @@ def test_main_routes_natural_finance_task_deterministically(capsys: Any, monkeyp
 
     output = capsys.readouterr().out
 
+    assert "thinking summary" in output
     assert "finance_route_task" in output
     assert "routed finance task: SpaceX 最近情况如何" in output
 
 
 def test_finance_task_router_does_not_capture_general_dev_tasks() -> None:
     assert _should_route_finance("SpaceX 最近情况如何")
+    assert _should_route_finance("给 agent 100万 自己投资 AAPL MSFT NVDA 买多少")
     assert not _should_route_finance("open README and replace a heading")
 
 
@@ -390,6 +547,17 @@ class ToolThenAnswerBackend:
         return {"role": "assistant", "content": "", "tool_calls": [{"name": self.tool_name, "arguments": {}}]}
 
 
+class SummarizingBackend:
+    def __init__(self) -> None:
+        self.summary_requests = 0
+
+    def chat(self, messages: list[dict[str, Any]], tools: list[dict] | None = None) -> dict[str, Any]:
+        self.summary_requests += 1
+        assert tools == []
+        assert "old user request" in messages[-1]["content"]
+        return {"role": "assistant", "content": "model generated handoff summary", "tool_calls": []}
+
+
 class StatusFinance:
     class Provider:
         def diagnostics(self) -> list[dict[str, str]]:
@@ -411,3 +579,141 @@ class StaticFinance(StatusFinance):
             indicators={},
             fetched_at=utc_now_iso(),
         )
+
+
+class PortfolioFinance(StatusFinance):
+    def build_paper_portfolio(
+        self,
+        symbols: list[str] | str,
+        initial_cash: float = 1_000_000,
+        period: str = "1y",
+        max_positions: int = 5,
+        name: str = "default",
+    ) -> str:
+        from finance.models import Financials, Quote, StockSnapshot, utc_now_iso
+        from finance.paper_portfolio import construct_portfolio, render_recommendation
+
+        snapshots = [
+            StockSnapshot(
+                symbol=symbol,
+                quote=Quote(symbol=symbol, price=100, source="STATIC", as_of=utc_now_iso(), is_realtime=True),
+                history=[],
+                financials=Financials(
+                    symbol=symbol,
+                    source="STATIC",
+                    as_of=utc_now_iso(),
+                    pe_ratio=20,
+                    free_cash_flow=1_000,
+                    return_on_equity=0.18,
+                    profit_margin=0.22,
+                ),
+                news=[],
+                indicators={"return_3m_pct": 10, "return_1y_pct": 20, "annualized_volatility_pct": 20},
+                fetched_at=utc_now_iso(),
+            )
+            for symbol in symbols
+        ]
+        account, scores = construct_portfolio(snapshots, initial_cash=initial_cash, name=name)
+        return render_recommendation(account, scores)
+
+    def mark_paper_portfolio(self, name: str = "default") -> str:
+        from finance.models import Quote, utc_now_iso
+        from finance.paper_portfolio import mark_to_market, render_account
+
+        account = mark_to_market(
+            get_quote=lambda symbol: Quote(symbol=symbol, price=101, source="STATIC", as_of=utc_now_iso()),
+            name=name,
+        )
+        return render_account(account)
+
+    def show_paper_portfolio(self, name: str = "default") -> str:
+        from finance.paper_portfolio import load_account, render_account
+
+        return render_account(load_account(name))
+
+    def sell_paper_holding(
+        self,
+        symbol: str,
+        shares: float | str = "all",
+        name: str = "default",
+        reason: str = "manual sell",
+    ) -> str:
+        from finance.paper_portfolio import render_account, render_transactions, sell_holding
+
+        account = sell_holding(symbol, shares=shares, price=101, reason=reason, name=name)
+        return render_account(account) + "\n\n" + render_transactions(account)
+
+    def paper_trades(self, name: str = "default", limit: int = 30) -> str:
+        from finance.paper_portfolio import load_account, render_transactions
+
+        return render_transactions(load_account(name), limit)
+
+    def paper_daily_pnl(self, name: str = "default", limit: int = 30) -> str:
+        from finance.paper_portfolio import load_account, render_daily_pnl
+
+        return render_daily_pnl(load_account(name), limit)
+
+    def review_paper_portfolio(
+        self,
+        symbols: list[str] | str | None = None,
+        period: str = "6mo",
+        name: str = "default",
+    ) -> str:
+        from finance.models import Financials, Quote, StockSnapshot, utc_now_iso
+        from finance.paper_portfolio import load_account, render_portfolio_review, score_candidates
+
+        account = load_account(name)
+        candidates = symbols if isinstance(symbols, list) else ["AAPL", "MSFT", "NVDA"]
+        snapshots = [
+            StockSnapshot(
+                symbol=symbol,
+                quote=Quote(symbol=symbol, price=100, source="STATIC", as_of=utc_now_iso(), is_realtime=True),
+                history=[],
+                financials=Financials(symbol=symbol, source="STATIC", as_of=utc_now_iso(), free_cash_flow=1),
+                news=[],
+                indicators={"return_1m_pct": 5, "return_3m_pct": 10, "return_1y_pct": 20, "annualized_volatility_pct": 20},
+                fetched_at=utc_now_iso(),
+            )
+            for symbol in candidates
+        ]
+        return render_portfolio_review(account, score_candidates(snapshots))
+
+    def rebalance_paper_portfolio(
+        self,
+        symbols: list[str] | str,
+        period: str = "1y",
+        max_positions: int = 5,
+        name: str = "default",
+    ) -> str:
+        return self.build_paper_portfolio(symbols, 1_000_000, period, max_positions, name)
+
+    def learn_from_history(
+        self,
+        symbol: str,
+        period: str = "2y",
+        horizon_days: int = 20,
+        record: bool = True,
+        update_skill: bool = True,
+    ) -> str:
+        from finance.history_learning import learn_from_history, render_learning, save_learning, update_history_learning_skill
+        from finance.predictions import record_prediction
+
+        candles = []
+        for idx in range(180):
+            from finance.models import Candle
+
+            candles.append(Candle(str(idx), None, None, None, 100 + idx))
+        rule = learn_from_history(symbol, candles, horizon_days=horizon_days)
+        save_learning(rule)
+        skill_path = update_history_learning_skill(rule)
+        prediction = record_prediction(
+            symbol=symbol,
+            direction=rule.predicted_direction,
+            horizon_days=horizon_days,
+            confidence=rule.confidence,
+            thesis="unit history learning",
+            baseline_price=279,
+            baseline_as_of="2026-01-01",
+            source="unit",
+        )
+        return f"{render_learning(rule)}\n\nSkill updated: {skill_path}\nPrediction recorded: {prediction.id}"

@@ -8,6 +8,19 @@ from finance.agent import FinanceResearchAgent
 from finance.backtest import StrategyConfig, backtest_moving_average_cross, format_backtest, parse_strategy
 from finance.data import ProviderChain, ProviderError, SampleDataProvider, _news_matches
 from finance.models import Candle, Financials, NewsItem, Quote, StockSnapshot, utc_now_iso
+from finance.history_learning import learn_from_history, render_learning, update_history_learning_skill
+from finance.paper_portfolio import (
+    construct_portfolio,
+    load_account,
+    mark_to_market,
+    rebalance_portfolio,
+    render_account,
+    render_daily_pnl,
+    render_portfolio_review,
+    render_transactions,
+    score_candidates,
+    sell_holding,
+)
 from finance.predictions import evaluate_prediction, record_prediction, render_learning_report
 from finance.quality import render_quality_screen
 from finance.report import render_stock_report
@@ -136,6 +149,189 @@ def test_route_task_selects_compare_and_backtest() -> None:
 
     assert "# 股票对比" in compare
     assert "# 策略回测结果" in backtest
+
+
+def test_route_task_portfolio_review_handles_direct_tickers_without_resolver_network(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:  # noqa: ANN001
+    import finance.paper_portfolio as portfolio
+    import finance.agent as finance_agent
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(portfolio, "PORTFOLIO_DIR", tmp_path / ".finance_agent")
+    monkeypatch.setattr(finance_agent, "resolve_symbol", lambda symbol: (_ for _ in ()).throw(AssertionError("network resolver should not be called")))
+    agent = FinanceResearchAgent(provider=ProviderChain(providers=[StaticProvider()]))
+
+    agent.build_paper_portfolio(["AAPL", "MSFT"], 100_000)
+    output = agent.route_task("MSFT 为什么买 有没有更好选择 GOOGL AVGO")
+
+    assert "纸面组合诊断" in output
+    assert "持仓复盘" in output
+
+
+def test_route_task_builds_paper_portfolio_for_cash_allocation(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:  # noqa: ANN001
+    import finance.paper_portfolio as portfolio
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(portfolio, "PORTFOLIO_DIR", tmp_path / ".finance_agent")
+    agent = FinanceResearchAgent(provider=ProviderChain(providers=[StaticProvider()]))
+
+    output = agent.route_task("给 agent 100万 自己投资 AAPL MSFT NVDA 买多少")
+
+    assert "# 模拟投资账户" in output
+    assert "候选评分" in output
+    assert "不会执行真实交易" in output
+
+
+def test_paper_portfolio_constructs_and_marks_account(tmp_path) -> None:  # noqa: ANN001
+    snapshot = StockSnapshot(
+        symbol="AAPL",
+        quote=Quote(symbol="AAPL", price=100, source="STATIC", as_of=utc_now_iso(), is_realtime=True),
+        history=rising_candles(120),
+        financials=Financials(
+            symbol="AAPL",
+            source="STATIC",
+            as_of=utc_now_iso(),
+            pe_ratio=20,
+            free_cash_flow=1_000_000,
+            return_on_equity=0.18,
+            profit_margin=0.22,
+        ),
+        news=[NewsItem(title="Static headline")],
+        indicators={"return_3m_pct": 12, "return_1y_pct": 24, "annualized_volatility_pct": 20},
+        fetched_at=utc_now_iso(),
+    )
+
+    account, scores = construct_portfolio([snapshot], initial_cash=1_000_000, base_dir=tmp_path)
+    assert account.transactions
+    assert account.transactions[0]["action"] == "BUY"
+    marked = mark_to_market(
+        get_quote=lambda symbol: Quote(symbol=symbol, price=110, source="STATIC", as_of=utc_now_iso()),
+        base_dir=tmp_path,
+    )
+    sold = sell_holding("AAPL", shares="all", price=120, base_dir=tmp_path, reason="unit sell")
+    output = render_account(marked)
+    trades = render_transactions(sold)
+    daily = render_daily_pnl(sold)
+
+    assert scores[0].score > 35
+    assert account.holdings
+    assert marked.history[-1]["event"] == "mark"
+    assert "累计收益" in output
+    assert "SELL" in trades
+    assert sold.transactions[-1]["realized_pnl"] > 0
+    assert "每日买卖盈亏" in daily
+    assert "已实现盈亏" in daily
+
+
+def test_paper_portfolio_rebalance_preserves_cost_basis(tmp_path) -> None:  # noqa: ANN001
+    def snapshot(symbol: str, price: float) -> StockSnapshot:
+        return StockSnapshot(
+            symbol=symbol,
+            quote=Quote(symbol=symbol, price=price, source="STATIC", as_of=utc_now_iso(), is_realtime=True),
+            history=[],
+            financials=Financials(
+                symbol=symbol,
+                source="STATIC",
+                as_of=utc_now_iso(),
+                pe_ratio=20,
+                free_cash_flow=1_000_000,
+                return_on_equity=0.18,
+                profit_margin=0.22,
+            ),
+            news=[],
+            indicators={"return_3m_pct": 12, "return_1y_pct": 24, "annualized_volatility_pct": 20},
+            fetched_at=utc_now_iso(),
+        )
+
+    construct_portfolio([snapshot("AAPL", 100)], initial_cash=1_000_000, base_dir=tmp_path)
+    rebalance_portfolio([snapshot("AAPL", 120), snapshot("MSFT", 100)], base_dir=tmp_path)
+    account = load_account(base_dir=tmp_path)
+    aapl = next(holding for holding in account.holdings if holding.symbol == "AAPL")
+
+    assert aapl.avg_cost == 100
+    assert {item["action"] for item in account.transactions} >= {"BUY", "SELL"}
+
+
+def test_paper_portfolio_scores_penalize_weak_relative_strength() -> None:
+    strong = StockSnapshot(
+        symbol="STRONG",
+        quote=Quote(symbol="STRONG", price=100, source="STATIC", as_of=utc_now_iso(), is_realtime=True),
+        history=[],
+        financials=Financials(symbol="STRONG", source="STATIC", as_of=utc_now_iso(), free_cash_flow=1, return_on_equity=0.2),
+        news=[],
+        indicators={"return_1m_pct": 6, "return_3m_pct": 18, "return_1y_pct": 35, "annualized_volatility_pct": 22},
+        fetched_at=utc_now_iso(),
+    )
+    weak = StockSnapshot(
+        symbol="WEAK",
+        quote=Quote(symbol="WEAK", price=100, source="STATIC", as_of=utc_now_iso(), is_realtime=True),
+        history=[],
+        financials=Financials(symbol="WEAK", source="STATIC", as_of=utc_now_iso(), free_cash_flow=1, return_on_equity=0.35, profit_margin=0.36),
+        news=[],
+        indicators={"return_1m_pct": 1, "return_3m_pct": 3, "return_1y_pct": -24, "annualized_volatility_pct": 22},
+        fetched_at=utc_now_iso(),
+    )
+
+    scores = {score.symbol: score for score in score_candidates([strong, weak])}
+
+    assert scores["STRONG"].score > scores["WEAK"].score
+    assert "弱" in scores["WEAK"].verdict or scores["WEAK"].score < 50
+    assert any("相对弱势" in warning or "相对强度" in warning for warning in scores["WEAK"].warnings)
+
+
+def test_portfolio_review_flags_weak_holding_and_replacements(tmp_path) -> None:  # noqa: ANN001
+    weak_snapshot = StockSnapshot(
+        symbol="WEAK",
+        quote=Quote(symbol="WEAK", price=100, source="STATIC", as_of=utc_now_iso(), is_realtime=True),
+        history=[],
+        financials=Financials(symbol="WEAK", source="STATIC", as_of=utc_now_iso(), free_cash_flow=1, return_on_equity=0.35, profit_margin=0.36),
+        news=[],
+        indicators={"return_1m_pct": 1, "return_3m_pct": 2, "return_1y_pct": -25, "annualized_volatility_pct": 20},
+        fetched_at=utc_now_iso(),
+    )
+    strong_snapshot = StockSnapshot(
+        symbol="STRONG",
+        quote=Quote(symbol="STRONG", price=100, source="STATIC", as_of=utc_now_iso(), is_realtime=True),
+        history=[],
+        financials=Financials(symbol="STRONG", source="STATIC", as_of=utc_now_iso(), free_cash_flow=1, return_on_equity=0.25, profit_margin=0.25),
+        news=[],
+        indicators={"return_1m_pct": 8, "return_3m_pct": 20, "return_1y_pct": 40, "annualized_volatility_pct": 20},
+        fetched_at=utc_now_iso(),
+    )
+    account, _ = construct_portfolio([weak_snapshot], initial_cash=100_000, base_dir=tmp_path, min_score=30)
+    output = render_portfolio_review(account, score_candidates([weak_snapshot, strong_snapshot]))
+
+    assert "纸面组合诊断" in output
+    assert "低置信持仓" in output
+    assert "STRONG" in output
+
+
+def test_history_learning_generates_forecast_and_skill(tmp_path) -> None:  # noqa: ANN001
+    rule = learn_from_history("AAPL", rising_candles(180), horizon_days=20)
+    skill_path = update_history_learning_skill(rule, path=tmp_path / "skills" / "finance-history-learning" / "SKILL.md")
+    output = render_learning(rule)
+
+    assert rule.predicted_direction in {"up", "down", "neutral"}
+    assert 0 <= rule.confidence <= 0.95
+    assert "历史学习预测" in output
+    assert skill_path.exists()
+    assert "finance-history-learning" in skill_path.read_text(encoding="utf-8")
+
+
+def test_route_task_learns_from_history(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:  # noqa: ANN001
+    import finance.history_learning as history_learning
+    import finance.agent as finance_agent
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(history_learning, "LEARNING_PATH", tmp_path / ".finance_agent" / "history_learning.jsonl")
+    monkeypatch.setattr(history_learning, "SKILL_PATH", tmp_path / "skills" / "finance-history-learning" / "SKILL.md")
+    monkeypatch.setattr(finance_agent, "save_learning", lambda rule: history_learning.save_learning(rule, tmp_path / ".finance_agent" / "history_learning.jsonl"))
+    monkeypatch.setattr(finance_agent, "update_history_learning_skill", lambda rule: history_learning.update_history_learning_skill(rule, tmp_path / "skills" / "finance-history-learning" / "SKILL.md"))
+    agent = FinanceResearchAgent(provider=ProviderChain(providers=[StaticProvider()]))
+
+    output = agent.route_task("从历史数据中学习 AAPL 未来20天怎么走 并沉淀为 skill")
+
+    assert "历史学习预测" in output
+    assert "Skill updated" in output
 
 
 def test_debate_includes_berkshire_style_roles() -> None:

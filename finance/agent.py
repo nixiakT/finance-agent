@@ -1,13 +1,29 @@
 """High-level finance research facade used by tools and CLI."""
 from __future__ import annotations
 
+from functools import wraps
 import re
 
 from .backtest import backtest_moving_average_cross, format_backtest, parse_strategy
 from .data import ProviderChain, export_history_csv
 from .debate import debate_stocks
+from .history_learning import learn_from_history, render_learning, save_learning, update_history_learning_skill
 from .indicators import calculate_indicators, format_indicators
-from .models import Financials, NewsItem, Quote, StockSnapshot, utc_now_iso
+from .models import Financials, Quote, StockSnapshot, utc_now_iso
+from .paper_portfolio import (
+    construct_portfolio,
+    load_account,
+    mark_to_market,
+    rebalance_portfolio,
+    render_account,
+    render_daily_pnl,
+    render_portfolio_review,
+    render_recommendation,
+    render_transactions,
+    sell_holding,
+    score_candidates,
+)
+from .predictions import record_prediction
 from .quality import render_quality_screen
 from .report import render_comparison, render_daily_brief, render_stock_report
 from .resolver import resolve_symbol, resolve_symbol_text
@@ -15,11 +31,27 @@ from .symbols import extract_symbols, normalize_symbol
 from .web import web_search
 
 
+def _with_provider_request_deadline(method):  # noqa: ANN001, ANN201
+    @wraps(method)
+    def wrapped(self, *args, **kwargs):  # noqa: ANN001, ANN202
+        deadline = getattr(self.provider, "request_deadline", None)
+        if not callable(deadline):
+            return method(self, *args, **kwargs)
+        with deadline():
+            return method(self, *args, **kwargs)
+
+    return wrapped
+
+
 class FinanceResearchAgent:
     def __init__(self, provider: ProviderChain | None = None):
         self.provider = provider or ProviderChain()
 
+    @_with_provider_request_deadline
     def snapshot(self, symbol: str, period: str = "1y", news_limit: int = 5) -> StockSnapshot:
+        reset_coverage = getattr(self.provider, "reset_coverage", None)
+        if callable(reset_coverage):
+            reset_coverage()
         normalized = _resolve_symbol(symbol)
         errors: list[str] = []
         try:
@@ -54,23 +86,23 @@ class FinanceResearchAgent:
         try:
             news = self.provider.get_news(normalized, news_limit) if news_limit > 0 else []
         except Exception as exc:
-            news = [
-                NewsItem(
-                    title=f"新闻获取失败: {_compact_error(exc)}",
-                    source="UNAVAILABLE",
-                    published_at=utc_now_iso(),
-                )
-            ]
+            news = []
             errors.append(f"新闻获取失败: {_compact_error(exc)}")
 
         if financials.market_cap is None and quote.market_cap is not None:
             financials.market_cap = quote.market_cap
+            financials.field_sources["market_cap"] = _quote_field_source(quote)
         if financials.pe_ratio is None and quote.pe_ratio is not None:
             financials.pe_ratio = quote.pe_ratio
+            financials.field_sources["pe_ratio"] = _quote_field_source(quote)
         if financials.eps is None and quote.eps is not None:
             financials.eps = quote.eps
+            financials.field_sources["eps"] = _quote_field_source(quote)
         if errors:
             _extend_unique(quote.notes, errors)
+        report_notes = getattr(self.provider, "report_notes", None)
+        if callable(report_notes):
+            _extend_unique(quote.notes, report_notes())
 
         indicators = calculate_indicators(history)
         return StockSnapshot(
@@ -81,6 +113,67 @@ class FinanceResearchAgent:
             news=news,
             indicators=indicators,
             fetched_at=utc_now_iso(),
+            source_coverage=_source_coverage(self.provider),
+        )
+
+    @_with_provider_request_deadline
+    def quick_snapshot(self, symbol: str, period: str = "6mo") -> StockSnapshot:
+        reset_coverage = getattr(self.provider, "reset_coverage", None)
+        if callable(reset_coverage):
+            reset_coverage()
+        normalized = _resolve_symbol(symbol)
+        errors: list[str] = []
+        try:
+            quote = self.provider.get_quote(normalized)
+        except Exception as exc:
+            quote = Quote(
+                symbol=normalized,
+                source="UNAVAILABLE",
+                as_of=utc_now_iso(),
+                is_realtime=False,
+                notes=[f"行情获取失败: {_compact_error(exc)}"],
+            )
+            errors.append(f"行情获取失败: {_compact_error(exc)}")
+        try:
+            history = self.provider.get_history(normalized, period, "1d")
+        except Exception as exc:
+            history = []
+            errors.append(f"历史价格获取失败: {_compact_error(exc)}")
+        financials = Financials(
+            symbol=normalized,
+            source="SKIPPED",
+            as_of=quote.as_of,
+            currency=quote.currency,
+            period_type="quote",
+            fetched_at=utc_now_iso(),
+            market_cap=quote.market_cap,
+            pe_ratio=quote.pe_ratio,
+            eps=quote.eps,
+            field_sources={
+                name: _quote_field_source(quote)
+                for name, value in (
+                    ("market_cap", quote.market_cap),
+                    ("pe_ratio", quote.pe_ratio),
+                    ("eps", quote.eps),
+                )
+                if value is not None
+            },
+            notes=["quick review skips full fundamentals for speed"],
+        )
+        if errors:
+            _extend_unique(quote.notes, errors)
+        report_notes = getattr(self.provider, "report_notes", None)
+        if callable(report_notes):
+            _extend_unique(quote.notes, report_notes())
+        return StockSnapshot(
+            symbol=normalized,
+            quote=quote,
+            history=history,
+            financials=financials,
+            news=[],
+            indicators=calculate_indicators(history),
+            fetched_at=utc_now_iso(),
+            source_coverage=_source_coverage(self.provider),
         )
 
     def get_quote(self, symbol: str) -> str:
@@ -186,6 +279,133 @@ class FinanceResearchAgent:
         snapshots = [self.snapshot(symbol, period, 2) for symbol in symbol_list]
         return render_daily_brief(snapshots)
 
+    def build_paper_portfolio(
+        self,
+        symbols: list[str] | str,
+        initial_cash: float = 1_000_000.0,
+        period: str = "1y",
+        max_positions: int = 5,
+        name: str = "default",
+    ) -> str:
+        symbol_list = _coerce_symbols(symbols)
+        snapshots = [self.snapshot(symbol, period, 3) for symbol in symbol_list]
+        account, scores = construct_portfolio(
+            snapshots,
+            initial_cash=initial_cash,
+            max_positions=max_positions,
+            name=name,
+        )
+        return render_recommendation(account, scores)
+
+    def rebalance_paper_portfolio(
+        self,
+        symbols: list[str] | str,
+        period: str = "1y",
+        max_positions: int = 5,
+        name: str = "default",
+    ) -> str:
+        symbol_list = _coerce_symbols(symbols)
+        snapshots = [self.snapshot(symbol, period, 3) for symbol in symbol_list]
+        account, scores = rebalance_portfolio(
+            snapshots,
+            name=name,
+            max_positions=max_positions,
+        )
+        return render_recommendation(account, scores)
+
+    def mark_paper_portfolio(self, name: str = "default") -> str:
+        account = mark_to_market(get_quote=self.provider.get_quote, name=name)
+        return render_account(account)
+
+    def show_paper_portfolio(self, name: str = "default") -> str:
+        return render_account(load_account(name))
+
+    def sell_paper_holding(
+        self,
+        symbol: str,
+        shares: float | str = "all",
+        name: str = "default",
+        reason: str = "manual sell",
+    ) -> str:
+        normalized = _resolve_symbol(symbol)
+        try:
+            quote = self.provider.get_quote(normalized)
+            price = quote.price
+        except Exception:
+            price = None
+        account = sell_holding(normalized, shares=shares, price=price, reason=reason, name=name)
+        return render_account(account) + "\n\n" + render_transactions(account, 10)
+
+    def paper_trades(self, name: str = "default", limit: int = 30) -> str:
+        return render_transactions(load_account(name), limit)
+
+    def paper_daily_pnl(self, name: str = "default", limit: int = 30) -> str:
+        return render_daily_pnl(load_account(name), limit)
+
+    def review_paper_portfolio(
+        self,
+        symbols: list[str] | str | None = None,
+        period: str = "6mo",
+        name: str = "default",
+    ) -> str:
+        account = load_account(name)
+        candidates = _coerce_symbols(symbols or []) if symbols else []
+        current = [holding.symbol for holding in account.holdings]
+        fallback = [] if candidates else ["AAPL", "MSFT", "NVDA", "AMD", "GOOGL", "AVGO", "TSLA", "JPM", "V"]
+        symbol_list = _unique_symbols([*current, *candidates, *fallback])
+        snapshots: list[StockSnapshot] = []
+        failures: list[str] = []
+        for symbol in symbol_list:
+            try:
+                snapshots.append(self.quick_snapshot(symbol, period))
+            except Exception as exc:
+                failures.append(f"{symbol}: {_compact_error(exc)}")
+        scores = score_candidates(snapshots)
+        output = render_portfolio_review(account, scores)
+        if failures:
+            output += "\n\n## 数据失败\n" + "\n".join(f"- {item}" for item in failures[:8])
+        return output
+
+    def learn_from_history(
+        self,
+        symbol: str,
+        period: str = "2y",
+        horizon_days: int = 20,
+        record: bool = True,
+        update_skill: bool = True,
+    ) -> str:
+        normalized = _resolve_symbol(symbol)
+        try:
+            history = self.provider.get_history(normalized, period, "1d")
+        except Exception as exc:
+            return f"{normalized}: 历史学习失败，历史价格获取失败: {_compact_error(exc)}"
+        rule = learn_from_history(normalized, history, horizon_days=horizon_days)
+        save_path = save_learning(rule)
+        skill_path = update_history_learning_skill(rule) if update_skill else None
+        prediction_line = ""
+        if record and history and history[-1].close is not None:
+            prediction = record_prediction(
+                symbol=normalized,
+                direction=rule.predicted_direction,
+                horizon_days=horizon_days,
+                confidence=rule.confidence,
+                thesis=f"history-learning expected_return={rule.expected_return_pct:.2f}% features={rule.current_features}",
+                baseline_price=float(history[-1].close),
+                baseline_as_of=history[-1].date,
+                source="history-learning",
+            )
+            prediction_line = f"\n\nPrediction recorded: {prediction.id} due={prediction.due_at}"
+        lines = [
+            render_learning(rule),
+            "",
+            f"Learning saved: {save_path}",
+        ]
+        if skill_path:
+            lines.append(f"Skill updated: {skill_path}")
+        if prediction_line:
+            lines.append(prediction_line.strip())
+        return "\n".join(lines)
+
     def route_task(self, task: str) -> str:
         symbols = extract_symbols(task)
         if not symbols and _looks_like_stock_task(task):
@@ -194,12 +414,18 @@ class FinanceResearchAgent:
             symbols = ["AAPL"]
         lowered = task.lower()
         period = _extract_period(task)
+        if _is_portfolio_review_task(task):
+            return self.review_paper_portfolio(symbols, period or "6mo")
+        if _is_portfolio_task(task):
+            return self.build_paper_portfolio(symbols, _extract_cash(task) or 1_000_000.0, period or "1y")
         if _is_market_update_task(task):
             return self.market_update_task(task, symbols[0])
         if any(word in task for word in ("标的", "代码", "上市", "是不是上市", "已经上市")):
             return self.verify_symbol_task(task, symbols[0])
         if any(word in task for word in ("回测", "策略")) or "backtest" in lowered:
             return self.backtest_strategy(symbols[0], task, period or "2y")
+        if _is_history_learning_task(task):
+            return self.learn_from_history(symbols[0], period or "2y", _extract_horizon(task) or 20)
         if any(word in task for word in ("简报", "自选股")) or "brief" in lowered:
             return self.daily_brief(symbols, period or "3mo")
         if any(word in task for word in ("质量门禁", "去劣", "初筛", "checklist", "quality")):
@@ -272,6 +498,19 @@ def _coerce_symbols(symbols: list[str] | str) -> list[str]:
     return [_resolve_symbol(symbol) for symbol in symbols if symbol]
 
 
+def _unique_symbols(symbols: list[str]) -> list[str]:
+    seen: set[str] = set()
+    result: list[str] = []
+    for symbol in symbols:
+        normalized = _resolve_symbol(symbol)
+        key = normalized.upper()
+        if key in seen:
+            continue
+        seen.add(key)
+        result.append(normalized)
+    return result
+
+
 def _extract_period(task: str) -> str:
     lowered = task.lower()
     if any(token in task for token in ("三个月", "3个月", "近三月", "最近三月")) or "3mo" in lowered:
@@ -287,15 +526,68 @@ def _extract_period(task: str) -> str:
     return ""
 
 
+def _extract_cash(task: str) -> float | None:
+    match = re.search(r"(\d+(?:\.\d+)?)\s*(万|w|W)", task)
+    if match:
+        return float(match.group(1)) * 10_000
+    match = re.search(r"(\d+(?:\.\d+)?)\s*(百万|million)", task, flags=re.IGNORECASE)
+    if match:
+        return float(match.group(1)) * 1_000_000
+    match = re.search(r"(\d+(?:\.\d+)?)\s*(?:元|cash|资金)", task, flags=re.IGNORECASE)
+    if match:
+        return float(match.group(1))
+    if "一百万" in task:
+        return 1_000_000.0
+    return None
+
+
+def _extract_horizon(task: str) -> int | None:
+    match = re.search(r"未来\s*(\d{1,3})\s*天", task)
+    if match:
+        return int(match.group(1))
+    match = re.search(r"(\d{1,3})\s*(?:day|days|d)\b", task, flags=re.IGNORECASE)
+    if match:
+        return int(match.group(1))
+    if "一个月" in task or "1个月" in task:
+        return 20
+    if "三个月" in task or "3个月" in task:
+        return 60
+    return None
+
+
 def _is_market_update_task(task: str) -> bool:
     return any(token in task for token in ("今天", "今日", "当天", "现在", "最新", "情况", "怎么了", "股价", "行情"))
 
 
+def _is_history_learning_task(task: str) -> bool:
+    lowered = task.lower()
+    return any(token in task for token in ("历史数据中学习", "从历史中学习", "历史学习", "学习预测", "沉淀为 skill", "沉淀成 skill")) or any(
+        token in lowered for token in ("learn from history", "history learning", "historical learning")
+    )
+
+
+def _is_portfolio_task(task: str) -> bool:
+    lowered = task.lower()
+    return any(token in task for token in ("100万", "一百万", "模拟组合", "纸面组合", "自己投资", "买多少", "仓位", "建仓")) or any(
+        token in lowered for token in ("paper portfolio", "portfolio", "allocate", "allocation")
+    )
+
+
+def _is_portfolio_review_task(task: str) -> bool:
+    lowered = task.lower()
+    return any(token in task for token in ("为什么买", "为什么要买", "更好选择", "替换", "调仓建议", "谁拖累", "持仓诊断", "组合诊断", "组合表现")) or any(
+        token in lowered for token in ("why buy", "better choice", "replacement", "replace", "review portfolio", "portfolio review")
+    )
+
+
 def _resolve_symbol(symbol: str) -> str:
+    stripped = symbol.strip()
+    if re.fullmatch(r"[A-Z]{1,6}(?:\.[A-Z]{1,4})?|\d{1,6}(?:\.[A-Z]{1,4})?", stripped):
+        return normalize_symbol(stripped)
     try:
         return resolve_symbol(symbol).symbol
-    except Exception:
-        return normalize_symbol(symbol)
+    except Exception as exc:
+        raise ValueError(f"无法可靠解析标的 {symbol!r}，请先用 /resolve 确认 ticker。") from exc
 
 
 def _looks_like_stock_task(task: str) -> bool:
@@ -312,12 +604,26 @@ def _extract_name_query(task: str) -> str:
     return " ".join(cleaned.split()) or task
 
 
+def _source_coverage(provider) -> dict[str, dict]:  # noqa: ANN001
+    getter = getattr(provider, "source_coverage", None)
+    if not callable(getter):
+        return {}
+    return {
+        method: getter(method)
+        for method in ("get_quote", "get_history", "get_financials", "get_news")
+    }
+
+
 def _compact_error(exc: Exception, limit: int = 220) -> str:
     text = " ".join(str(exc).split())
     text = text.replace("For more information check:", "详情:")
     if len(text) <= limit:
         return text
     return text[:limit] + "..."
+
+
+def _quote_field_source(quote: Quote) -> str:
+    return f"{quote.source or 'UNKNOWN'} (quote, {quote.as_of or '未知时点'})"
 
 
 def _verification_query(task: str, symbol: str) -> str:
