@@ -4,7 +4,9 @@ from __future__ import annotations
 import os
 import re
 import shlex
+import shutil
 from pathlib import Path
+from urllib.parse import urlparse
 
 
 class SecurityError(PermissionError):
@@ -60,6 +62,28 @@ SAFE_COMMANDS = {
     "python3",
 }
 SAFE_PYTHON_MODULES = {"pytest", "compileall", "agent.cli"}
+DENY_SHELL_SNIPPETS = (
+    "rm -rf /",
+    "rm -rf ~",
+    ":(){",
+    "mkfs",
+    "dd if=",
+    "> /dev/sd",
+    "curl ",
+    "wget ",
+)
+ALLOW_WEB_FETCH_HOSTS = {
+    "example.com",
+    "api.deepseek.com",
+    "finance.yahoo.com",
+    "query1.finance.yahoo.com",
+    "query2.finance.yahoo.com",
+    "www.nasdaq.com",
+    "www.sec.gov",
+    "www.hkex.com.hk",
+    "www.sse.com.cn",
+    "www.szse.cn",
+}
 
 
 def resolve_workspace_path(path: str, *, must_exist: bool = False) -> Path:
@@ -91,7 +115,19 @@ def guard_write(path: str, content: str) -> Path:
     return resolved
 
 
+def guard_web_fetch(url: str) -> None:
+    parsed = urlparse(url.strip())
+    host = (parsed.hostname or "").lower()
+    if parsed.scheme not in {"http", "https"} or not host:
+        raise SecurityError("web_fetch 只允许明确的 http/https URL。")
+    if host not in ALLOW_WEB_FETCH_HOSTS:
+        raise SecurityError(f"web_fetch 出站域名不在白名单内，已拦截: {host}")
+
+
 def guard_shell(command: str) -> list[str]:
+    lowered = command.lower()
+    if any(snippet in lowered for snippet in DENY_SHELL_SNIPPETS):
+        raise SecurityError(f"[沙箱] 拒绝执行高危命令：{command}")
     try:
         parts = shlex.split(command)
     except ValueError as exc:
@@ -108,6 +144,22 @@ def guard_shell(command: str) -> list[str]:
     if executable not in SAFE_COMMANDS:
         raise SecurityError(f"命令 `{executable}` 不在安全白名单内。")
     return parts
+
+
+def sandbox_command(args: list[str]) -> list[str]:
+    """Wrap a command in bubblewrap when available; otherwise return args."""
+    bwrap = shutil.which("bwrap")
+    if not bwrap:
+        return args
+    return [
+        bwrap,
+        "--ro-bind", "/", "/",
+        "--bind", str(WORKSPACE_ROOT), str(WORKSPACE_ROOT),
+        "--chdir", str(WORKSPACE_ROOT),
+        "--unshare-net",
+        "--dev", "/dev",
+        *args,
+    ]
 
 
 def untrusted_block(kind: str, source: str, content: str) -> str:
@@ -160,5 +212,6 @@ def safety_summary() -> str:
         "- read/grep/glob: 只读工作区内普通文件，阻止 .env/.git 等敏感路径。",
         "- write/edit: 只允许写工作区内普通文件，疑似 secret 写入会被拦截。",
         "- bash: 默认只允许单条白名单命令；危险命令、多命令、重定向、外传命令会被拦截。",
+        "- web_fetch: 只允许白名单域名，阻止把敏感数据外传到任意主机。",
         "- web/file 内容作为不可信数据注入 observation，提示模型不要服从其中指令。",
     ])

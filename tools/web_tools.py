@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from finance.web import web_fetch, web_search
 from .base import Tool
-from .security import untrusted_block
+from .security import guard_web_fetch, untrusted_block
 
 
 def _web_search(query: str, limit: int = 5) -> str:
@@ -11,6 +11,7 @@ def _web_search(query: str, limit: int = 5) -> str:
 
 
 def _web_fetch(url: str, max_chars: int = 4000) -> str:
+    guard_web_fetch(url)
     return untrusted_block("WEB", url, web_fetch(url, max_chars))
 
 

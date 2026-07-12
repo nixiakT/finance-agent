@@ -4,14 +4,15 @@ from __future__ import annotations
 import subprocess
 
 from .base import Tool
-from .security import guard_shell
+from .security import guard_shell, sandbox_command
 
 
 def _bash(command: str, timeout: int = 30) -> str:
     args = guard_shell(command)
+    sandboxed = sandbox_command(args)
     try:
         result = subprocess.run(
-            args,
+            sandboxed,
             cwd=".",
             text=True,
             capture_output=True,
