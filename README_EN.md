@@ -109,7 +109,7 @@ python -m agent.cli "Give the agent 1,000,000 paper cash to invest in AAPL, MSFT
 /sources                     Show data-source priority
 ```
 
-Interactive input uses `prompt_toolkit`, with history, cursor movement, Ctrl+A/E/U/K, and fuzzy slash-command completion. One catalog drives help and built-in completion, then runtime discovery merges Markdown custom commands, Skills, and MCP prompts. A persistent bottom bar shows thinking mode, model, available data sources, Skill count, and MCP connection count. The CLI also cleans accidentally pasted `finance-agent >` prefixes.
+Interactive input uses `prompt_toolkit`, with history, cursor movement, Ctrl+A/E/U/K, and fuzzy slash-command completion. Typing `/` or a command prefix pins up to eight matching commands and descriptions above the input; use `Up/Down` to move, `Tab/Enter` to accept, and `Esc` to close. One catalog drives help and built-in completion, then runtime discovery merges Markdown custom commands, Skills, and MCP prompts. A persistent bottom bar shows thinking mode, model, available data sources, Skill count, and MCP connection count. The CLI also cleans accidentally pasted `finance-agent >` prefixes.
 
 By default, the CLI displays a high-level `thinking` trace in `compact` mode. Tool details use width-bounded cards: `/think on` expands them live, `compact` shows only tool count, elapsed time, and names, `/trace` reopens the previous details, and `/think off` hides the trace. This is an auditable execution summary, not hidden chain-of-thought.
 
@@ -227,9 +227,9 @@ python -m agent.cli /schedule run
 
 ## Configuration
 
-Without `DEEPSEEK_API_KEY`, the system uses `FakeBackend` and routes finance tasks to local deterministic tools for offline demos. With a real model configured, the agent uses an OpenAI-compatible chat completions endpoint to select tools and organize answers.
+Without `DEEPSEEK_API_KEY`, the system uses `FakeBackend`, which selects local `finance_route_task` from inside the Agent loop for offline demos. With a real model configured, the agent uses an OpenAI-compatible chat completions endpoint to select tools and organize answers.
 
-To avoid stale model knowledge about newly listed, renamed, or cross-market symbols, natural-language finance queries first go through deterministic `finance_route_task`: resolve symbols, verify public web pages and quotes, then write the report. Non-finance coding tasks still use the ReAct loop.
+With a real model, every natural-language finance query enters the ReAct loop: the model decomposes the request, combines quote, history, fundamentals, news, and web-verification tools, then synthesizes the answer. Explicit slash commands such as `/report` and `/compare` remain deterministic. A finance task falls back to the fixed report only when the very first model request fails before any tool has run; later model failures never rerun tools automatically.
 
 ```bash
 cp .env.example .env.local
@@ -296,7 +296,7 @@ python -m agent.cli "Analyze recent SpaceX developments"
 - Free data sources may be delayed, rate-limited, or missing fields.
 - When a page has WAF or JavaScript challenges, the tool reports the limitation instead of pretending to read the full content.
 - Repeating "this stock will rise," asking to omit risks, or claiming insider information adds no evidence and does not raise confidence.
-- Deterministic finance answers are recorded in the same interactive session, so follow-ups such as "what about it?" retain context. Compacted history is low-trust data and is never promoted to a system instruction.
+- A deterministic finance fallback produced after a first-turn model failure is recorded in the same interactive session, so follow-ups such as "what about it?" retain context. Compacted history is low-trust data and is never promoted to a system instruction.
 
 ## License
 

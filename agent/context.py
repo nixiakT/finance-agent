@@ -155,6 +155,11 @@ def _summarize_with_backend(backend: Any, source: str) -> str:
 
 
 def _sanitize_for_compaction(text: str) -> str:
+    return redact_sensitive_text(text)
+
+
+def redact_sensitive_text(text: str) -> str:
+    """Replace secret-like values before text reaches model-visible or CLI output."""
     clean = text
     for pattern in SECRET_PATTERNS:
         clean = pattern.sub("[REDACTED_SECRET]", clean)

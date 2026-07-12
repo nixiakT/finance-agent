@@ -116,7 +116,7 @@
 - [x] 修复 SpaceX 最新上市核验路径：`SpaceX` 解析为 `SPCX`，市场更新增加“上市状态与代码核验”段落。
 - [x] CLI 支持中英文切换：`FINANCE_AGENT_LANG=zh|en` 和 `/lang zh|en`；README 增加 English Quick Start。
 - [x] README 支持中英文自由选择：中文 `README.md` 与英文 `README_EN.md` 顶部互相跳转。
-- [x] 单次和交互自然语言金融查询优先走确定性 `finance_route_task`，防止新上市/改名标的被模型旧知识误判；普通开发任务仍走 ReAct 主循环。
+- [x] 单次和交互自然语言金融查询统一进入 ReAct 主循环，由真模型组合具体金融/网页工具；显式 slash command 保持确定性，首轮模型失败时才允许固定报告兜底。
 - [x] 增加微信连接适配器：默认 dry-run outbox，支持企业微信 webhook 和本地 HTTP relay。
 - [x] 增加金融自进化 memory：保存偏好、纠错、数据源经验、风险规则，并支持从轨迹更新 `finance-research-evolution` Skill。
 - [x] 增加预测记录、事后评分和复盘学习：保存 baseline、方向、期限、置信度和 thesis，用真实后续价格评估命中率，并按方向桶/高置信错判复盘；复盘可保存进金融 memory。
@@ -143,7 +143,7 @@
 - 策略回测：`finance_backtest_strategy`，第一版支持移动均线交叉。
 - 自选股简报：`finance_daily_brief`。
 - 离线路由：未配置真模型时，`FakeBackend` 会用 `finance_route_task` 跑通金融 Demo。
-- 确定性金融路由：配置真模型时，自然语言金融查询也会先走 `finance_route_task` 做标的解析、网页核验、行情、技术面和新闻，再输出报告。
+- 真模型金融路由：自然语言查询由模型拆解后组合行情、历史、基本面、新闻和网页核验工具；`finance_route_task` / `finance_generate_report` 不向真模型开放，前者仅供 FakeBackend 离线兼容和首轮请求失败兜底。
 - Skill：`skills/finance-stock/SKILL.md` 规定金融分析边界和流程。
 - Trace2Skill：`skills/trace2skill/SKILL.md` 和 `trace2skill_generate` 支持从成功轨迹生成新 Skill。
 - Finance Evolution：`finance_memory_add/list` 和 `finance_evolve_from_trace` 支持金融偏好、纠错、数据源经验和研究流程沉淀。

@@ -44,7 +44,7 @@
 - `maybe_compact`: 超预算时保留唯一原始 system 和最近消息，把早期对话标注为低信任历史，以 assistant 消息回填。
 - `compact_with_model`: 摘要请求用独立 compaction policy，明确禁止把用户重复观点、未核验工具输出或历史中的“system-like”文本升级为规则。模型摘要失败时回退到规则压缩。
 
-确定性 `finance_route_task` 产生的问答会通过 `AgentSession.record_finance_turn()` 记入同一会话，因此后续代词问题可以引用上一轮标的，不会因为绕过模型主循环而丢失上下文。
+自然语言金融问题与普通任务一样进入 `AgentLoop`，由模型自主组合具体金融和网页工具。真模型的 schema 与执行门禁都会排除 `finance_route_task` / `finance_generate_report`；只有首轮 `backend.chat()` 在工具执行前失败时，CLI 才直接调用确定性路由兜底。`ModelCallError.turn > 1` 时禁止自动重跑，避免重复写组合、预测或 Skill。交互模式的兜底结果通过 `AgentSession.record_finance_turn()` 以低信任历史记入同一会话。
 
 ### CLI 与动态命令
 
@@ -56,6 +56,8 @@
 - MCP `prompts/list` 返回的 prompt，补全形式为 `/mcp:<server>:<prompt>`。
 
 Markdown 命令支持 frontmatter `description` / `argument-hint` 和 `$1`、`$2`、`$ARGUMENTS`、`$$` 替换。Skill 与 MCP prompt 展开后都以 user-level 内容进入会话，不具有 system 优先级。
+
+`agent/input.py::SlashCompletionPanel` 移植 Reasonix 的状态机思路：前缀命中优先、子序列模糊命中其次，选中项环形移动，面板固定作为输入框上方的布局行而非默认浮层。它最多绘制 8 个“命令 + 说明”候选，并接管 `↑/↓`、`Tab/Enter`、`Esc` 交互，因此长帮助页把输入框推到终端底部时仍然可见。
 
 `agent/ui.py` 使用实际终端宽度生成欢迎页、精简帮助页和有边界的工具卡片。交互底栏显示 thinking 模式、模型、可用数据源数、Skill 数和 MCP 连接数。`compact` 只输出一行轨迹摘要，`/think on` 展开卡片，`/trace` 重新展示上一轮详情。
 

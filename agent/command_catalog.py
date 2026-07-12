@@ -27,6 +27,7 @@ class CompletionItem:
 _COMMANDS = (
     CommandSpec("help", "/help", "查看命令菜单", "show command menu", "session"),
     CommandSpec("status", "/status", "查看模型、数据、Skill 和 MCP 状态", "show runtime status", "session"),
+    CommandSpec("think", "/think", "查看当前执行轨迹模式", "show current trace mode", "session"),
     CommandSpec("think-on", "/think on", "展开执行轨迹", "expand execution trace", "session"),
     CommandSpec("think-compact", "/think compact", "折叠执行轨迹", "fold execution trace", "session"),
     CommandSpec("think-off", "/think off", "隐藏执行轨迹", "hide execution trace", "session"),
