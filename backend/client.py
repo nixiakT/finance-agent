@@ -33,7 +33,7 @@ class DeepSeekBackend:
                  api_key: str | None = None,
                  base_url: str | None = None,
                  model: str | None = None,
-                 timeout: float = 60.0):
+                 timeout: float | None = None):
         load_local_env()
         self.api_key = api_key or os.environ.get("DEEPSEEK_API_KEY", "")
         self.base_url = _normalize_base_url(base_url or os.environ.get("DEEPSEEK_BASE_URL", "https://api.deepseek.com"))
@@ -44,7 +44,9 @@ class DeepSeekBackend:
             raise ValueError("DEEPSEEK_API_MODE must be chat_completions or responses")
         if not self.api_key:
             raise RuntimeError("缺少 DEEPSEEK_API_KEY 环境变量")
-        self._client = http_client(timeout=timeout, follow_redirects=True)
+        self.timeout = timeout or _positive_float_env("FINANCE_MODEL_TIMEOUT_SECONDS", 240.0)
+        self.read_retries = max(_nonnegative_int_env("FINANCE_MODEL_READ_RETRIES", 1), 0)
+        self._client = http_client(timeout=self.timeout, follow_redirects=True)
 
     def chat(self, messages: list[dict[str, Any]], tools: list[dict] | None = None,
              temperature: float = 0.0) -> dict[str, Any]:
@@ -60,7 +62,7 @@ class DeepSeekBackend:
             payload["tools"] = tools           # OpenAI tools 格式，base.Tool.schema() 已生成
             payload["tool_choice"] = "auto"
 
-        resp = self._client.post(
+        resp = self._post(
             f"{self.base_url}/v1/chat/completions",
             headers={"Authorization": f"Bearer {self.api_key}"},
             json=payload,
@@ -83,13 +85,22 @@ class DeepSeekBackend:
         if tools:
             payload["tools"] = [self._to_responses_tool(tool) for tool in tools]
             payload["tool_choice"] = "auto"
-        resp = self._client.post(
+        resp = self._post(
             f"{self.base_url}/v1/responses",
             headers={"Authorization": f"Bearer {self.api_key}"},
             json=payload,
         )
         resp.raise_for_status()
         return self._normalize_response(resp.json())
+
+    def _post(self, url: str, *, headers: dict[str, str], json: dict[str, Any]) -> httpx.Response:
+        for attempt in range(self.read_retries + 1):
+            try:
+                return self._client.post(url, headers=headers, json=json)
+            except httpx.ReadTimeout:
+                if attempt >= self.read_retries:
+                    raise
+        raise RuntimeError("unreachable model retry state")
 
     # --- 把内部 messages（含 role=tool）转成 OpenAI 标准格式 ---
     def _to_openai_messages(self, messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -191,3 +202,18 @@ def _normalize_base_url(base_url: str) -> str:
     if base.endswith("/v1"):
         return base[:-3]
     return base
+
+
+def _positive_float_env(name: str, default: float) -> float:
+    try:
+        value = float(os.environ.get(name, default))
+    except (TypeError, ValueError):
+        return default
+    return value if value > 0 else default
+
+
+def _nonnegative_int_env(name: str, default: int) -> int:
+    try:
+        return int(os.environ.get(name, default))
+    except (TypeError, ValueError):
+        return default

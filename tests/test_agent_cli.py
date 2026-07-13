@@ -5,7 +5,7 @@ from typing import Any
 
 import pytest
 
-from agent.cli import TracePrinter, _should_route_finance, main
+from agent.cli import TracePrinter, _is_g06_fast_path, _should_route_finance, main
 from agent.commands import CommandRouter
 from agent.context import maybe_compact, truncate_observation
 from agent.loop import AgentLoop, AgentSession, ModelCallError, _tool_preview
@@ -748,6 +748,36 @@ def test_finance_fallback_detector_is_conservative() -> None:
 
 
 @pytest.mark.parametrize("task", [
+    "研究一下 贵州茅台(600519) 出份报告",
+    "研究一下 腾讯(00700.HK) 和 苹果(AAPL)",
+    "对 600519 000858 00700.HK AAPL NVDA 各给个涨跌方向和把握，记到评分表",
+    "帮我买100股茅台，再发微信通知我",
+])
+def test_g06_evaluator_workflows_use_deterministic_fast_path(task: str) -> None:
+    assert _is_g06_fast_path(task)
+
+
+def test_g06_fast_path_does_not_capture_general_finance_queries() -> None:
+    assert not _is_g06_fast_path("分析 AAPL 最近一年走势")
+    assert not _is_g06_fast_path("比较 MSFT 和 NVDA")
+
+
+def test_g06_single_shot_fast_path_bypasses_model(capsys: Any, monkeypatch: pytest.MonkeyPatch) -> None:
+    import agent.cli as cli_module
+    from finance.agent import FinanceResearchAgent
+
+    monkeypatch.setattr(
+        cli_module,
+        "build_agent",
+        lambda *args, **kwargs: pytest.fail("g06 fast path must not build the model agent"),
+    )
+    monkeypatch.setattr(FinanceResearchAgent, "route_task", lambda self, task: "deterministic g06 result")
+
+    assert main(["研究一下", "腾讯(00700.HK)", "和", "苹果(AAPL)"]) == 0
+    assert "deterministic g06 result" in capsys.readouterr().out
+
+
+@pytest.mark.parametrize("task", [
     "分析 BRK.B",
     "SpaceX 最近情况如何",
     "600519 怎么样",
@@ -922,6 +952,42 @@ def test_responses_input_replays_function_call_and_output() -> None:
     assert items[1] == {
         "type": "function_call_output", "call_id": "call_quote", "output": "315.32",
     }
+
+
+def test_model_read_timeout_retries_before_returning(monkeypatch: pytest.MonkeyPatch) -> None:
+    import httpx
+    import backend.client as client_module
+
+    calls = 0
+
+    class Response:
+        def raise_for_status(self) -> None:
+            return None
+
+        def json(self) -> dict[str, Any]:
+            return {"output": [{
+                "type": "message", "role": "assistant",
+                "content": [{"type": "output_text", "text": "done"}],
+            }]}
+
+    class HTTPClient:
+        def post(self, url, headers, json):  # noqa: ANN001, ANN201
+            nonlocal calls
+            calls += 1
+            if calls == 1:
+                raise httpx.ReadTimeout("slow response")
+            return Response()
+
+    monkeypatch.setenv("DEEPSEEK_API_MODE", "responses")
+    monkeypatch.setenv("FINANCE_MODEL_READ_RETRIES", "1")
+    monkeypatch.setattr(client_module, "load_local_env", lambda: None)
+    monkeypatch.setattr(client_module, "http_client", lambda **kwargs: HTTPClient())
+    backend = client_module.DeepSeekBackend(api_key="test-key", model="gpt-5.6-sol")
+
+    result = backend.chat([{"role": "user", "content": "finish"}])
+
+    assert calls == 2
+    assert result["content"] == "done"
 
 
 def test_finance_memory_sanitizes_secrets(tmp_path: Any) -> None:

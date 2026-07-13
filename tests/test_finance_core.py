@@ -38,6 +38,8 @@ def test_symbol_normalization_handles_common_markets() -> None:
     assert to_yahoo_symbol("02513.HK") == "2513.HK"
     assert extract_symbols("比较 智谱 和 AAPL 最近走势")[:2] == ["02513.HK", "AAPL"]
     assert normalize_symbol("SpaceX") == "SPCX"
+    assert normalize_symbol("腾讯") == "00700.HK"
+    assert to_yahoo_symbol("腾讯") == "0700.HK"
     assert extract_symbols("SpaceX 最近情况如何")[0] == "SPCX"
 
 
