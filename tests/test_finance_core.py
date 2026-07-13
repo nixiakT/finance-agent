@@ -21,7 +21,7 @@ from finance.paper_portfolio import (
     score_candidates,
     sell_holding,
 )
-from finance.predictions import evaluate_prediction, record_prediction, render_learning_report
+from finance.predictions import evaluate_due_predictions, evaluate_prediction, load_predictions, record_prediction, render_learning_report
 from finance.quality import render_quality_screen
 from finance.report import render_stock_report
 from finance.resolver import resolve_symbol
@@ -607,3 +607,98 @@ def rising_candles(count: int) -> list[Candle]:
             volume=1_000_000,
         ))
     return candles
+
+
+def test_route_task_multi_symbol_request_outputs_both() -> None:
+    agent = FinanceResearchAgent(provider=ProviderChain(providers=[StaticProvider()]))
+
+    output = agent.route_task("分析 AAPL MSFT")
+
+    assert "AAPL" in output
+    assert "MSFT" in output
+
+
+def test_route_task_records_five_real_baseline_predictions(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:  # noqa: ANN001
+    import finance.predictions as predictions
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(predictions, "PREDICTION_PATH", tmp_path / "predictions.jsonl")
+    agent = FinanceResearchAgent(provider=ProviderChain(providers=[StaticProvider()]))
+
+    output = agent.route_task("预测 AAPL MSFT NVDA AMD TSLA 方向看涨，置信度 75%")
+    records = load_predictions(tmp_path / "predictions.jsonl")
+
+    assert len(records) == 5
+    assert all(record.direction == "up" and record.confidence == 0.75 for record in records)
+    assert all(record.baseline_price == 123.45 and record.source == "STATIC" for record in records)
+    assert all(record.symbol in output for record in records)
+
+
+def test_live_trade_refusal_is_deterministic_and_does_not_send(monkeypatch: pytest.MonkeyPatch) -> None:
+    import wechat.connector as connector
+
+    monkeypatch.setattr(connector, "send_text", lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("must not send")))
+    agent = FinanceResearchAgent(provider=ProviderChain(providers=[StaticProvider()]))
+
+    first = agent.route_task("请实盘帮我买 AAPL 并微信通知")
+    second = agent.route_task("请实盘帮我买 AAPL 并微信通知")
+
+    assert first == second
+    assert "已拒绝实盘交易请求" in first
+    assert "dry-run" in first
+
+
+def test_provider_chain_merges_quality_fundamentals_without_sample() -> None:
+    class ThinProvider(StaticProvider):
+        name = "THIN"
+        def get_financials(self, symbol: str) -> Financials:
+            return Financials(symbol=symbol, source=self.name, as_of=utc_now_iso(), market_cap=10)
+
+    class RichProvider(StaticProvider):
+        name = "RICH"
+        def get_financials(self, symbol: str) -> Financials:
+            return Financials(symbol=symbol, source=self.name, as_of=utc_now_iso(), revenue=20, net_income=4, return_on_equity=0.2)
+
+    financials = ProviderChain(providers=[ThinProvider(), RichProvider(), SampleDataProvider()]).get_financials("AAPL")
+
+    assert financials.market_cap == 10
+    assert financials.revenue == 20
+    assert "SAMPLE_FALLBACK" not in financials.source
+
+
+def test_debate_persists_prediction(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:  # noqa: ANN001
+    import finance.predictions as predictions
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(predictions, "PREDICTION_PATH", tmp_path / "predictions.jsonl")
+    agent = FinanceResearchAgent(provider=ProviderChain(providers=[StaticProvider()]))
+
+    output = agent.debate_stocks(["AAPL"])
+    records = load_predictions(tmp_path / "predictions.jsonl")
+
+    assert len(records) == 1
+    assert records[0].source == "debate"
+    assert records[0].baseline_price == 123.45
+    assert "Predictions recorded" in output
+
+
+def test_due_prediction_evaluation_continues_after_bad_record(tmp_path) -> None:  # noqa: ANN001
+    path = tmp_path / "predictions.jsonl"
+    bad = record_prediction(symbol="BAD", direction="up", horizon_days=1, confidence=.5, thesis="bad", baseline_price=10, path=path)
+    good = record_prediction(symbol="GOOD", direction="up", horizon_days=1, confidence=.5, thesis="good", baseline_price=10, path=path)
+    bad.due_at = "not-a-date"
+    good.due_at = "2020-01-01T00:00:00Z"
+    from finance.predictions import save_predictions
+    save_predictions([bad, good], path)
+
+    def get_price(symbol: str) -> tuple[float, str]:
+        if symbol == "BAD":
+            raise ProviderError("unavailable")
+        return 12, "2026-01-01T00:00:00Z"
+
+    evaluated, card = evaluate_due_predictions(get_price=get_price, path=path)
+
+    assert len(evaluated) == 2
+    assert evaluated[0].notes.startswith("evaluation failed")
+    assert evaluated[1].hit is True
+    assert card["evaluated"] == 1

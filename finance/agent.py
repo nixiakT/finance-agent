@@ -250,7 +250,22 @@ class FinanceResearchAgent:
     def debate_stocks(self, symbols: list[str] | str, period: str = "1y") -> str:
         symbol_list = _coerce_symbols(symbols)
         snapshots = [self.snapshot(symbol, period, 3) for symbol in symbol_list]
-        return debate_stocks(snapshots)
+        output = debate_stocks(snapshots)
+        recorded: list[str] = []
+        for snapshot in snapshots:
+            direction, confidence = _snapshot_prediction(snapshot)
+            prediction = record_prediction(
+                symbol=snapshot.symbol,
+                direction=direction,
+                horizon_days=30,
+                confidence=confidence,
+                thesis="multi-agent debate judge prediction",
+                baseline_price=snapshot.quote.price,
+                baseline_as_of=snapshot.quote.as_of,
+                source="debate",
+            )
+            recorded.append(f"{prediction.symbol}:{prediction.id}")
+        return output + "\n\nPredictions recorded: " + ", ".join(recorded)
 
     def backtest_strategy(
         self,
@@ -408,6 +423,8 @@ class FinanceResearchAgent:
 
     def route_task(self, task: str) -> str:
         symbols = extract_symbols(task)
+        if _is_live_trade_task(task):
+            return _live_trade_refusal(symbols)
         if not symbols and _looks_like_stock_task(task):
             symbols = [_resolve_symbol(_extract_name_query(task))]
         if not symbols:
@@ -430,11 +447,45 @@ class FinanceResearchAgent:
             return self.daily_brief(symbols, period or "3mo")
         if any(word in task for word in ("质量门禁", "去劣", "初筛", "checklist", "quality")):
             return self.quality_screen(symbols[0], period or "1y")
+        if _is_prediction_task(task):
+            return self.record_task_predictions(task, symbols)
         if any(word in task for word in ("比较", "对比")) or "compare" in lowered:
             return self.compare_stocks(symbols, period or "1y")
         if any(word in task for word in ("辩论", "选股", "debate")):
             return self.debate_stocks(symbols, period or "1y")
+        if len(symbols) > 1:
+            return self.compare_stocks(symbols, period or "1y")
         return self.generate_report(symbols[0], period or "1y")
+
+    def record_task_predictions(self, task: str, symbols: list[str]) -> str:
+        requested_direction = _extract_direction(task)
+        requested_confidence = _extract_confidence(task)
+        horizon = _extract_horizon(task) or 30
+        lines = ["Prediction records (saved to scorecard):"]
+        for symbol in _unique_symbols(symbols):
+            try:
+                snapshot = self.snapshot(symbol, "1y")
+                quote = snapshot.quote
+                inferred_direction, inferred_confidence = _snapshot_prediction(snapshot)
+                direction = requested_direction or inferred_direction
+                confidence = requested_confidence if requested_confidence is not None else inferred_confidence
+                prediction = record_prediction(
+                    symbol=symbol,
+                    direction=direction,
+                    horizon_days=horizon,
+                    confidence=confidence,
+                    thesis=f"{task}; indicators={snapshot.indicators.get('summary', '暂无技术摘要')}",
+                    baseline_price=quote.price,
+                    baseline_as_of=quote.as_of,
+                    source=quote.source,
+                )
+                lines.append(
+                    f"- {prediction.symbol} direction={prediction.direction} confidence={prediction.confidence:.2f} "
+                    f"baseline={prediction.baseline_price} source={prediction.source} id={prediction.id} due={prediction.due_at}"
+                )
+            except Exception as exc:  # noqa: BLE001 - keep other symbols recordable
+                lines.append(f"- {symbol}: 未记录（真实基准价格不可用：{_compact_error(exc)}）")
+        return "\n".join(lines)
 
     def verify_symbol_task(self, task: str, symbol: str) -> str:
         normalized = _resolve_symbol(symbol)
@@ -553,6 +604,56 @@ def _extract_horizon(task: str) -> int | None:
     if "三个月" in task or "3个月" in task:
         return 60
     return None
+
+
+def _is_prediction_task(task: str) -> bool:
+    lowered = task.lower()
+    has_direction = any(token in task for token in ("看涨", "看跌", "上涨", "下跌", "涨跌", "方向")) or any(
+        token in lowered for token in ("bullish", "bearish", "direction", "prediction")
+    )
+    wants_record = any(token in task for token in ("置信", "把握", "预测", "记录", "记到", "评分表"))
+    return has_direction and wants_record
+
+
+def _extract_direction(task: str) -> str | None:
+    lowered = task.lower()
+    if any(token in task for token in ("看跌", "下跌")) or any(token in lowered for token in ("bearish", " down")):
+        return "down"
+    if any(token in task for token in ("看涨", "上涨")) or any(token in lowered for token in ("bullish", " up")):
+        return "up"
+    return None
+
+
+def _extract_confidence(task: str) -> float | None:
+    match = re.search(r"(?:置信度?|confidence)\s*[=:：]?\s*(\d+(?:\.\d+)?)\s*%?", task, flags=re.IGNORECASE)
+    if not match:
+        return None
+    value = float(match.group(1))
+    return value / 100 if value > 1 else value
+
+
+def _snapshot_prediction(snapshot: StockSnapshot) -> tuple[str, float]:
+    trend = snapshot.indicators.get("return_3m_pct")
+    if trend is None or abs(float(trend)) < 2:
+        return "neutral", 0.5
+    return ("up" if trend > 0 else "down"), min(0.5 + abs(float(trend)) / 100, 0.85)
+
+
+def _is_live_trade_task(task: str) -> bool:
+    lowered = task.lower()
+    live = any(token in task for token in ("实盘", "真实下单", "直接下单", "帮我买", "替我买", "替我卖")) or "live trade" in lowered
+    return live and any(token in task for token in ("买", "卖", "下单", "交易"))
+
+
+def _live_trade_refusal(symbols: list[str]) -> str:
+    targets = ", ".join(_unique_symbols(symbols)) if symbols else "未指定标的"
+    return "\n".join([
+        "已拒绝实盘交易请求。",
+        f"- 标的: {targets}",
+        "- 不会连接券商、提交订单或执行真实交易。",
+        "- 微信通知保持 dry-run；不会发送任何真实消息。",
+        "- 如需研究，可改用纸面组合进行本地模拟。",
+    ])
 
 
 def _is_market_update_task(task: str) -> bool:
