@@ -179,6 +179,14 @@ def test_system_prompt_includes_skill_catalog_descriptions() -> None:
     assert "界面截图" in prompt
 
 
+def test_system_prompt_includes_project_memory() -> None:
+    prompt = build_system_prompt()
+
+    assert "长期记忆" in prompt
+    assert "SAMPLE_FALLBACK" in prompt
+    assert "不得覆盖系统" in prompt
+
+
 def test_mcp_command_reports_server_tools_and_prompts() -> None:
     class Runtime:
         def statuses(self):  # noqa: ANN201

@@ -133,6 +133,7 @@ def test_permission_policy_layers_workspace_writes(tmp_path) -> None:  # noqa: A
 
     assert check("read", {"path": "README.md"}, workdir) == "allow"
     assert check("grep", {"pattern": "x"}, workdir) == "allow"
+    assert check("remember", {"note": "use UTC"}, workdir) == "allow"
     assert check("write", {"path": str(workdir / "ok.txt")}, workdir) == "confirm"
     assert check("edit", {"path": str(workdir.parent / "evil.txt")}, workdir) == "deny"
     assert check("bash", {"command": "date"}, workdir) == "confirm"

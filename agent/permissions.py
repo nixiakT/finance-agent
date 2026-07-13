@@ -6,6 +6,7 @@ from typing import Any
 
 
 READONLY = {"read", "grep", "glob", "read_skill", "task_list", "web_search"}
+MEMORY_WRITE = {"remember", "memory_set", "memory_forget"}
 WRITE = {"write", "edit", "trace2skill_generate"}
 EXEC = {"bash", "web_fetch"}
 AUTO_FINANCE_PREFIXES = (
@@ -18,7 +19,7 @@ AUTO_FINANCE_PREFIXES = (
 
 def check(tool: str, args: dict[str, Any], workdir: Path) -> str:
     """Return ``allow``, ``confirm`` or ``deny`` for one tool call."""
-    if tool in READONLY or tool.startswith(AUTO_FINANCE_PREFIXES):
+    if tool in READONLY or tool in MEMORY_WRITE or tool.startswith(AUTO_FINANCE_PREFIXES):
         return "allow"
     if tool in WRITE:
         path = _write_path_for(tool, args)

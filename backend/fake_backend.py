@@ -38,6 +38,15 @@ class FakeBackend:
         if messages and messages[-1].get("role") == "tool":
             return {"role": "assistant", "content": _unwrap_finance_tool_result(str(last)), "tool_calls": []}
 
+        if tools and "记住" in str(last):
+            note = str(last).split("记住", 1)[-1].lstrip("：: ").strip()
+            if note:
+                return {
+                    "role": "assistant",
+                    "content": "",
+                    "tool_calls": [{"name": "remember", "arguments": {"note": note}}],
+                }
+
         # 金融任务：离线时也走 finance_route_task，方便无模型 API 的 Demo。
         if tools and _looks_like_finance_task(str(last)):
             return {
