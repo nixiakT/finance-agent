@@ -90,11 +90,16 @@ def resolve_workspace_path(path: str, *, must_exist: bool = False) -> Path:
     candidate = Path(path).expanduser()
     if not candidate.is_absolute():
         candidate = WORKSPACE_ROOT / candidate
-    resolved = candidate.resolve(strict=must_exist)
+    # Resolve and validate the boundary before checking existence. Otherwise a
+    # missing path outside the workspace leaks through as FileNotFoundError and
+    # bypasses the security decision/audit marker.
+    resolved = candidate.resolve(strict=False)
     if not _is_within_workspace(resolved):
         raise SecurityError(f"路径越界，禁止访问工作区外文件: {path}")
     if any(part in BLOCKED_PATH_PARTS for part in resolved.parts):
         raise SecurityError(f"路径命中敏感目录/文件，已拦截: {path}")
+    if must_exist and not resolved.exists():
+        raise FileNotFoundError(resolved)
     return resolved
 
 

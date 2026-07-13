@@ -243,7 +243,7 @@ DEEPSEEK_BASE_URL=https://api.deepseek.com
 DEEPSEEK_MODEL=deepseek-chat
 ALPHAVANTAGE_API_KEY=...
 TUSHARE_TOKEN=...
-FINANCE_ALLOW_SAMPLE_FALLBACK=1
+FINANCE_ALLOW_SAMPLE_FALLBACK=0
 FINANCE_HTTP_PROXY=http://127.0.0.1:7897
 FINANCE_AGENT_LANG=en
 FINANCE_WECHAT_MODE=dry-run
@@ -263,10 +263,10 @@ Provider order:
 4. Yahoo Finance public endpoints
 5. `SAMPLE_FALLBACK`, only for offline demos
 
-`SAMPLE_FALLBACK` is clearly labeled and must not be used for real investment judgment. To disable sample data:
+`SAMPLE_FALLBACK` is clearly labeled, must not be used for real investment judgment, and is disabled by default. Enable it explicitly only for offline demos:
 
 ```bash
-FINANCE_ALLOW_SAMPLE_FALLBACK=0
+FINANCE_ALLOW_SAMPLE_FALLBACK=1
 ```
 
 Applicable real providers run concurrently under one deadline per operation and one total snapshot deadline. Timed-out providers are reported and temporarily circuit-broken instead of blocking successful fallbacks. Configure `FINANCE_PROVIDER_TIMEOUT_SECONDS`, `FINANCE_SNAPSHOT_TIMEOUT_SECONDS`, and `FINANCE_PROVIDER_COOLDOWN_SECONDS`; defaults are 25, 45, and 60 seconds.

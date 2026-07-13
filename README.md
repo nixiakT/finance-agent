@@ -243,7 +243,7 @@ DEEPSEEK_BASE_URL=https://api.deepseek.com
 DEEPSEEK_MODEL=deepseek-chat
 ALPHAVANTAGE_API_KEY=...
 TUSHARE_TOKEN=...
-FINANCE_ALLOW_SAMPLE_FALLBACK=1
+FINANCE_ALLOW_SAMPLE_FALLBACK=0
 FINANCE_HTTP_PROXY=http://127.0.0.1:7897
 FINANCE_AGENT_LANG=zh
 FINANCE_WECHAT_MODE=dry-run
@@ -263,10 +263,10 @@ Provider 顺序：
 4. Yahoo Finance public endpoints
 5. `SAMPLE_FALLBACK`，仅用于离线演示
 
-`SAMPLE_FALLBACK` 会明确标注，不能用于真实投资判断。如果希望严禁样例数据，设置：
+`SAMPLE_FALLBACK` 会明确标注，不能用于真实投资判断，且默认禁用。仅在离线演示需要样例数据时显式设置：
 
 ```bash
-FINANCE_ALLOW_SAMPLE_FALLBACK=0
+FINANCE_ALLOW_SAMPLE_FALLBACK=1
 ```
 
 真实来源会并发查询，每类数据共享一个操作时限，整份快照也有总时限；超时源会被记入失败覆盖并暂时熔断，不会阻塞已成功的备用源。可用 `FINANCE_PROVIDER_TIMEOUT_SECONDS`、`FINANCE_SNAPSHOT_TIMEOUT_SECONDS` 和 `FINANCE_PROVIDER_COOLDOWN_SECONDS` 调整，默认分别为 25、45、60 秒。

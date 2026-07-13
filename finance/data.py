@@ -873,7 +873,10 @@ class SampleDataProvider:
 class ProviderChain:
     def __init__(self, providers: list[MarketDataProvider] | None = None):
         load_local_env()
-        self.allow_sample_fallback = _env_truthy("FINANCE_ALLOW_SAMPLE_FALLBACK", default=True)
+        configured_sample_fallback = _env_truthy("FINANCE_ALLOW_SAMPLE_FALLBACK", default=False)
+        self.allow_sample_fallback = configured_sample_fallback or bool(
+            providers and any(_is_sample_provider(provider) for provider in providers)
+        )
         default: list[MarketDataProvider] = []
         alpha = AlphaVantageProvider()
         tushare = TushareProvider()
@@ -892,8 +895,8 @@ class ProviderChain:
             {"name": "Yahoo Finance public endpoints", "status": "enabled", "detail": "public endpoints may be delayed"},
             {
                 "name": "SAMPLE_FALLBACK",
-                "status": "enabled" if self.allow_sample_fallback else "disabled",
-                "detail": "demo-only fallback" if self.allow_sample_fallback else "FINANCE_ALLOW_SAMPLE_FALLBACK=0",
+                "status": "enabled" if configured_sample_fallback else "disabled",
+                "detail": "demo-only fallback" if configured_sample_fallback else "FINANCE_ALLOW_SAMPLE_FALLBACK=0",
             },
         ]
         if alpha.available():
@@ -901,7 +904,7 @@ class ProviderChain:
         if tushare.available():
             default.append(tushare)
         default.extend([AKShareProvider(), YahooFinanceProvider()])
-        if self.allow_sample_fallback:
+        if configured_sample_fallback:
             default.append(SampleDataProvider())
         self._using_default_providers = providers is None
         self.providers = default if providers is None else providers
@@ -1550,18 +1553,18 @@ def _financial_field_differences(financials: list[tuple[str, Financials]]) -> di
 
 
 def _financial_field_compatible(primary: Financials, candidate: Financials, field_name: str) -> bool:
-    if field_name in _FINANCIAL_MONETARY_FIELDS and (
-        not primary.currency or not candidate.currency or primary.currency != candidate.currency
+    if (
+        field_name in _FINANCIAL_MONETARY_FIELDS
+        and primary.currency
+        and candidate.currency
+        and primary.currency != candidate.currency
     ):
         return False
     if field_name in _FINANCIAL_PERIOD_FIELDS:
-        return bool(
-            primary.as_of
-            and candidate.as_of
-            and primary.as_of == candidate.as_of
-            and primary.period_type
-            and primary.period_type == candidate.period_type
-        )
+        if primary.as_of and candidate.as_of and primary.as_of != candidate.as_of:
+            return False
+        if primary.period_type and candidate.period_type and primary.period_type != candidate.period_type:
+            return False
     return True
 
 
