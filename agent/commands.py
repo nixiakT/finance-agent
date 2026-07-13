@@ -75,6 +75,8 @@ class CommandRouter:
             return CommandResult(True, selfcheck=True)
         if command == "/think":
             return self._think(args, think_enabled)
+        if command == "/trace":
+            return self._trace_mode(args, think_enabled)
         if command == "/lang":
             return self._lang(args)
         if command == "/tools":
@@ -291,7 +293,7 @@ class CommandRouter:
                 f"- MCP servers: {mcp_summary}",
                 f"- Proxy: {proxy_label()}",
                 f"- WeChat: {_wechat_mode_label()}",
-                f"- thinking: {think_label} (compact by default; use /think on for details)",
+                f"- trace: {'on' if think_label == 'on' else 'off'} (off by default; use /trace on for details)",
                 f"- Data sources: {', '.join(enabled_sources) if enabled_sources else 'no real source enabled'}",
                 "- License: MIT",
                 "- Boundary: research only, no auto trading",
@@ -306,7 +308,7 @@ class CommandRouter:
             f"- MCP 服务: {mcp_summary}",
             f"- Proxy: {proxy_label()}",
             f"- WeChat: {_wechat_mode_label()}",
-            f"- thinking: {think_label}（默认 compact；/think on 展开详情）",
+            f"- trace: {'on' if think_label == 'on' else 'off'}（默认 off；/trace on 展开详情）",
             f"- 数据源: {', '.join(enabled_sources) if enabled_sources else '无可用真实数据源'}",
             "- License: MIT",
             "- 边界: research only, no auto trading",
@@ -672,6 +674,23 @@ class CommandRouter:
             "Usage: /think on | /think compact | /think off",
             "用法：/think on | /think compact | /think off",
         ))
+
+    def _trace_mode(self, args: list[str], think_enabled: str | bool) -> CommandResult:
+        if not args:
+            state = "on" if _think_label(think_enabled) == "on" else "off"
+            return CommandResult(True, _msg(f"trace state: {state}", f"trace 当前状态：{state}"))
+        value = args[0].lower()
+        if value in {"on", "true", "1"}:
+            return CommandResult(True, _msg(
+                "trace on: model turns, tool calls, arguments and result previews stay visible.",
+                "trace on：模型回合、工具调用、参数和结果摘要会全部保留在终端。",
+            ), think="on")
+        if value in {"off", "false", "0"}:
+            return CommandResult(True, _msg(
+                "trace off: progress is folded into a live status and one completion summary (default).",
+                "trace off：执行过程折叠为动态状态和一行完成摘要（默认）。",
+            ), think="compact")
+        return CommandResult(True, _msg("Usage: /trace on | /trace off", "用法：/trace on | /trace off"))
 
     def _lang(self, args: list[str]) -> CommandResult:
         if not args:

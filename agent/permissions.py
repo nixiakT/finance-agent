@@ -1,6 +1,7 @@
 """Tool permission policy for the agent runtime."""
 from __future__ import annotations
 
+import os
 from pathlib import Path
 from typing import Any
 
@@ -18,6 +19,8 @@ AUTO_FINANCE_PREFIXES = (
 
 def check(tool: str, args: dict[str, Any], workdir: Path) -> str:
     """Return ``allow``, ``confirm`` or ``deny`` for one tool call."""
+    if tool == "wechat_send":
+        return "allow" if _wechat_delivery_is_local() else "confirm"
     if tool in READONLY or tool.startswith(AUTO_FINANCE_PREFIXES):
         return "allow"
     if tool in WRITE:
@@ -56,3 +59,15 @@ def _inside(path: Path, workdir: Path) -> bool:
         return True
     except ValueError:
         return False
+
+
+def _wechat_delivery_is_local() -> bool:
+    mode = os.environ.get("FINANCE_WECHAT_MODE", "").strip().lower()
+    if mode in {"dry-run", "dryrun", "file"}:
+        return True
+    if mode in {"webhook", "relay"}:
+        return False
+    return not (
+        os.environ.get("FINANCE_WECHAT_WEBHOOK", "").strip()
+        or os.environ.get("FINANCE_WECHAT_RELAY_URL", "").strip()
+    )

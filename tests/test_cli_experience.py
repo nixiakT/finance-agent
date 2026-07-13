@@ -23,8 +23,10 @@ def test_command_catalog_drives_missing_completions() -> None:
     completions = command_completions()
 
     assert "/trace" in completions
+    assert "/trace on" in completions
+    assert "/trace off" in completions
     assert "/export-report AAPL 3mo reports/aapl.md" in completions
-    assert "/think compact" in completions
+    assert "/think compact" not in completions
     assert "/skills" in completions
     assert len({spec.name for spec in command_specs()}) == len(command_specs())
 
@@ -40,16 +42,16 @@ def test_interactive_input_uses_catalog_by_default(monkeypatch) -> None:  # noqa
 
 def test_reasonix_style_completion_ranks_prefix_first_and_windows_eight_rows() -> None:
     rows = [
-        SlashCompletionItem("/think", "current mode"),
-        SlashCompletionItem("/think compact", "compact mode"),
+        SlashCompletionItem("/trace", "last trace"),
+        SlashCompletionItem("/trace off", "fold trace"),
         SlashCompletionItem("/fetch", "fuzzy subsequence match"),
         *[SlashCompletionItem(f"/command-{index}") for index in range(10)],
     ]
     panel = SlashCompletionPanel(lambda: rows)
 
-    panel.update("/th")
+    panel.update("/tr")
 
-    assert [item.label for item in panel.items[:3]] == ["/think", "/think compact", "/fetch"]
+    assert [item.label for item in panel.items] == ["/trace", "/trace off"]
     panel.update("/")
     assert len(panel.visible_items()) == MAX_COMPLETION_ROWS
     panel.move(-1)
@@ -105,29 +107,29 @@ def test_reasonix_style_completion_is_rendered_and_keyboard_driven(tmp_path) -> 
             reader._session.app.ttimeoutlen = 0.05
             task = asyncio.create_task(reader._session.prompt_async())
 
-            pipe_input.send_text("/th")
+            pipe_input.send_text("/tr")
             await asyncio.sleep(0.15)
 
             transcript = rendered.getvalue()
             assert reader._panel.active
-            assert "/think compact" in transcript
+            assert "/trace off" in transcript
             assert "折叠执行轨迹" in transcript
             assert "Tab/Enter 选中" in transcript
 
             pipe_input.send_text("\x1b")
             await asyncio.sleep(0.1)
             assert not reader._panel.active
-            assert reader._session.default_buffer.text == "/th"
+            assert reader._session.default_buffer.text == "/tr"
 
-            pipe_input.send_text("\x15/th")
+            pipe_input.send_text("\x15/tr")
             await asyncio.sleep(0.15)
             pipe_input.send_text("\x1b[B\x1b[B\t")
             await asyncio.sleep(0.15)
-            assert reader._session.default_buffer.text == "/think compact"
+            assert reader._session.default_buffer.text == "/trace off"
             assert not reader._panel.active
 
             pipe_input.send_text("\r")
-            assert await asyncio.wait_for(task, timeout=1) == "/think compact"
+            assert await asyncio.wait_for(task, timeout=1) == "/trace off"
 
     asyncio.run(scenario())
 
@@ -186,6 +188,10 @@ def test_welcome_adapts_to_small_and_large_terminals(monkeypatch) -> None:  # no
         output = render_welcome(width=width)
         assert max(_display_width(line) for line in output.splitlines()) <= width
         assert "Finance Agent" in output
+
+    wide = render_welcome(width=100)
+    assert "招财进宝符" in wide
+    assert "Available Tools" in wide
 
 
 def test_help_is_catalog_backed_and_compact(monkeypatch) -> None:  # noqa: ANN001
@@ -267,7 +273,7 @@ def test_custom_markdown_command_loads_and_substitutes_arguments(tmp_path) -> No
     )
 
 
-def test_tool_card_is_bounded_and_points_to_trace(monkeypatch) -> None:  # noqa: ANN001
+def test_tool_card_is_bounded_without_repeated_trace_hint(monkeypatch) -> None:  # noqa: ANN001
     monkeypatch.setenv("NO_COLOR", "1")
 
     output = render_tool_card(
@@ -280,7 +286,9 @@ def test_tool_card_is_bounded_and_points_to_trace(monkeypatch) -> None:  # noqa:
 
     assert "finance_get_news" in output
     assert "done" in output
-    assert "/trace" in output
+    assert "/trace" not in output
+    assert len(output.splitlines()) > 3
+    assert len(output.splitlines()) <= 7
     assert max(_display_width(line) for line in output.splitlines()) <= 60
 
 

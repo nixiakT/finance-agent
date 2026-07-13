@@ -46,7 +46,7 @@ Interactive mode keeps one persistent session:
 finance-agent > /help
 finance-agent > /lang en
 finance-agent > Analyze AAPL over the last three months
-finance-agent > /think off
+finance-agent > /trace off
 finance-agent > /proxy test
 finance-agent > /quote AAPL
 finance-agent > /wechat status
@@ -68,7 +68,7 @@ python -m agent.cli "Give the agent 1,000,000 paper cash to invest in AAPL, MSFT
 ## Common Commands
 
 ```text
-/think on | /think compact | /think off
+/trace on | /trace off
                               Toggle high-level execution trace; compact is the default folded summary
 /trace                       Expand the previous task's detailed thinking trace
 /lang zh | /lang en          Switch CLI language
@@ -111,7 +111,7 @@ python -m agent.cli "Give the agent 1,000,000 paper cash to invest in AAPL, MSFT
 
 Interactive input uses `prompt_toolkit`, with history, cursor movement, Ctrl+A/E/U/K, and fuzzy slash-command completion. Typing `/` or a command prefix pins up to eight matching commands and descriptions above the input; use `Up/Down` to move, `Tab/Enter` to accept, and `Esc` to close. One catalog drives help and built-in completion, then runtime discovery merges Markdown custom commands, Skills, and MCP prompts. A persistent bottom bar shows thinking mode, model, available data sources, Skill count, and MCP connection count. The CLI also cleans accidentally pasted `finance-agent >` prefixes.
 
-By default, the CLI displays a high-level `thinking` trace in `compact` mode. Tool details use width-bounded cards: `/think on` expands them live, `compact` shows only tool count, elapsed time, and names, `/trace` reopens the previous details, and `/think off` hides the trace. This is an auditable execution summary, not hidden chain-of-thought.
+The CLI defaults to `trace off`: current progress refreshes in place and folds into one completion summary. `/trace on` keeps every model turn, tool call, argument, and result preview visible. After a task, bare `/trace` reopens the previous full details. This is an auditable execution trace, not hidden chain-of-thought.
 
 ## Custom Commands, Skills, And MCP
 

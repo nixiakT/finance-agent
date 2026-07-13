@@ -11,30 +11,96 @@ from agent.command_catalog import specs_by_category
 from config import load_local_env
 
 
+WELCOME_LOGO = [
+    ("╭────────── 招财进宝符 ───────────╮", "red"),
+    ("│    ◌    ✦     ◌     ✦    ◌      │", "gold"),
+    ("│          /\\_______/\\            │", "white"),
+    ("│      ___(  ◠   ◠  )___          │", "white"),
+    ("│    .'    \\   ᴗ   /    `.        │", "white"),
+    ("│   /   ╭─╮\\_____/╭─╮   \\         │", "gold"),
+    ("│  |    │ │  ___  │ │    |        │", "white"),
+    ("│  |    │ │ (___) │ │    |        │", "white"),
+    ("│   \\   ╰─╯\\___/╰─╯   /           │", "white"),
+    ("│    `-.    /   \\    .-'          │", "gold"),
+    ("│       (  o ) ( o  )             │", "white"),
+    ("│      ◢████████████◣             │", "red"),
+    ("│     ═══╧════════╧═══            │", "red"),
+    ("╰─────────────────────────────────╯", "gold"),
+    ("model", "muted"),
+    ("{model}", "muted"),
+    ("research only", "gold"),
+    ("facts · inference · risk", "muted"),
+    ("no auto trading", "red"),
+]
+
+WELCOME_PANEL_ROWS = [
+    ("Available Tools", ""),
+    ("finance", "quote, history, financials, news"),
+    ("analysis", "indicators, report, compare"),
+    ("agents", "debate, risk, value, macro"),
+    ("strategy", "backtest, brief, trace2skill"),
+    ("web", "search, fetch, source check"),
+    ("wechat", "status, send, report outbox"),
+    ("memory", "preference, correction, evolve"),
+    ("prediction", "ledger, scorecard, review"),
+    ("portfolio", "paper account, allocation, PnL"),
+    ("learning", "history patterns, skill update"),
+    ("schedule", "wechat brief, due runner"),
+    ("", ""),
+    ("Market Sources", ""),
+    ("quotes", "Yahoo Finance, Alpha Vantage"),
+    ("A-share", "Tushare, AKShare"),
+    ("fallback", "sample data is clearly marked"),
+    ("", ""),
+    ("Commands", ""),
+    ("/help", "menu and examples"),
+    ("/status", "model, sources, tools"),
+    ("/trace on", "expand execution trace"),
+]
+
+
 def render_welcome(width: int | None = None) -> str:
-    """Render a short launch panel that fits the current terminal."""
+    """Render the lucky-cat workspace on wide terminals, compact elsewhere."""
     frame_width = _terminal_width(width)
+    if frame_width < 72:
+        return _render_compact_welcome(frame_width)
+
+    inner = frame_width - 2
+    load_local_env()
+    model = os.environ.get("DEEPSEEK_MODEL", "not configured")
+    rows = [_frame_title(" Finance Agent · stock research workspace ", inner)]
+    logo_rows = [
+        _color(_truncate_display(model, 35), color) if text == "{model}" else _color(text, color)
+        for text, color in WELCOME_LOGO
+    ]
+    body_rows = max(len(logo_rows), len(WELCOME_PANEL_ROWS))
+    for index in range(body_rows):
+        left = logo_rows[index] if index < len(logo_rows) else ""
+        label, value = WELCOME_PANEL_ROWS[index] if index < len(WELCOME_PANEL_ROWS) else ("", "")
+        rows.append(_welcome_panel_line(left, _welcome_right_cell(label, value), inner))
+    rows.append(_welcome_panel_line("", "", inner))
+    if current_lang() == "en":
+        ask = "Analyze AAPL over the last 3 months"
+        hint = "/help commands  ↑/↓ history"
+    else:
+        ask = "分析一下 AAPL 最近三个月走势"
+        hint = "/help 命令  ↑/↓ 历史"
+    rows.append(_welcome_panel_line(_color("Ask", "cyan") + "  " + ask, hint, inner))
+    rows.append(_color("╰" + "─" * inner + "╯", "gold"))
+    return "\n".join(rows)
+
+
+def _render_compact_welcome(frame_width: int) -> str:
     inner = frame_width - 2
     load_local_env()
     model = os.environ.get("DEEPSEEK_MODEL", "not configured")
     rows = [
-        _frame_title(" Finance Agent · stock research ", inner),
-        _frame_line(f"ฅ^•ﻌ•^ฅ  model {model}", inner),
-        _frame_line("data  Yahoo · AKShare · optional Alpha Vantage/Tushare", inner),
-        _frame_line("boundary  research only · facts / inference / risk · no auto trading", inner),
-        _frame_line("", inner),
+        _frame_title(" Finance Agent ", inner),
+        _frame_line(f"ฅ^•ﻀ•^ฅ  model {model}", inner),
+        _frame_line("research only · no auto trading", inner),
+        _frame_line("/help  /status  /trace on", inner),
+        _color("╰" + "─" * inner + "╯", "gold"),
     ]
-    if current_lang() == "en":
-        rows.extend([
-            _frame_line("Try   Analyze AAPL over the last 3 months", inner),
-            _frame_line("Help  /help    Status  /status    Trace  /think on", inner),
-        ])
-    else:
-        rows.extend([
-            _frame_line("试试  分析一下 AAPL 最近三个月走势", inner),
-            _frame_line("帮助  /help    状态  /status    轨迹  /think on", inner),
-        ])
-    rows.append(_color("╰" + "─" * inner + "╯", "gold"))
     return "\n".join(rows)
 
 
@@ -129,11 +195,23 @@ def render_trace_summary(
         tool_part += f", +{len(tools) - 4}"
     if tool_part:
         tool_part = f" · {tool_part}"
-    expand = " · /trace 展开" if current_lang() == "zh" else " · /trace to expand"
-    return (
-        f"{_color('thinking summary', 'muted')} · {steps} steps · "
-        f"{tool_count} {tool_label}{elapsed_part}{tool_part}{expand}"
-    )
+    expand = " · /trace"
+    return f"{_color('thinking', 'muted')} · completed{elapsed_part} · {steps} steps · {tool_count} {tool_label}{tool_part}{expand}"
+
+
+def render_thinking_status(
+    detail: str,
+    *,
+    elapsed: float = 0.0,
+    frame: str = "·",
+    width: int | None = None,
+) -> str:
+    """Render one transient, width-aware progress line."""
+    budget = _terminal_width(width)
+    prefix = f"{_color(frame, 'gold')} {_color('thinking', 'muted')} · "
+    suffix = f" · {_format_elapsed(elapsed)}"
+    detail_width = max(budget - _display_width(prefix) - _display_width(suffix), 1)
+    return _truncate_display(prefix + _truncate_display(detail, detail_width) + suffix, budget)
 
 
 def render_tool_card(
@@ -144,15 +222,15 @@ def render_tool_card(
     elapsed: float | None = None,
     width: int | None = None,
 ) -> str:
-    """Render a bounded tool event; compact mode keeps it behind ``/trace``."""
+    """Render a bounded tool event without repeating global usage hints."""
     frame_width = _terminal_width(width)
     inner = frame_width - 2
     timing = f" · +{_format_elapsed(elapsed)}" if elapsed is not None else ""
-    hint = "/trace 可重新展开上一轮工具轨迹" if current_lang() == "zh" else "/trace reopens the last tool trace"
+    content_width = max(inner - 2, 1)
+    detail_lines = _wrap_display(detail, content_width, max_lines=5)
     return "\n".join([
         _frame_title(f" tool {name} · {state}{timing} ", inner),
-        _frame_line(_trace_detail(detail, max(inner - 2, 1)), inner),
-        _frame_line(hint, inner),
+        *(_frame_line(line, inner) for line in detail_lines),
         _color("╰" + "─" * inner + "╯", "gold"),
     ])
 
@@ -182,13 +260,32 @@ def _frame_line(text: str, inner: int) -> str:
     return _color("│", "gold") + " " + content + " " + _color("│", "gold")
 
 
+def _welcome_panel_line(left: str, right: str, inner: int) -> str:
+    left_width = min(35, max(inner // 2 - 1, 1))
+    right_width = max(inner - left_width - 2, 1)
+    left_text = _pad_display(_truncate_display(left, left_width), left_width)
+    right_text = _pad_display(_truncate_display(right, right_width), right_width)
+    return _color("│", "gold") + " " + left_text + " " + right_text + _color("│", "gold")
+
+
+def _welcome_right_cell(label: str, value: str) -> str:
+    if not label and not value:
+        return ""
+    if value:
+        return _color(label + ": ", "cyan") + value
+    return _color(label, "cyan")
+
+
 def _color(text: str, name: str) -> str:
     if not _should_color():
         return text
     colors = {
         "gold": "\033[38;5;220m",
         "green": "\033[38;5;82m",
+        "cyan": "\033[38;5;80m",
         "muted": "\033[38;5;245m",
+        "red": "\033[38;5;203m",
+        "white": "\033[38;5;255m",
     }
     return f"{colors.get(name, '')}{text}\033[0m"
 
@@ -237,6 +334,43 @@ def _truncate_display(text: str, width: int) -> str:
         visible += char
         used += char_width
     return visible + "…"
+
+
+def _wrap_display(text: str, width: int, max_lines: int = 5) -> list[str]:
+    """Wrap text by terminal display width and cap noisy tool output."""
+    clean = " ".join(str(text).split())
+    if not clean:
+        return [""]
+
+    lines: list[str] = []
+    remaining = clean
+    while remaining and len(lines) < max_lines:
+        line, remaining = _take_display_line(remaining, width)
+        lines.append(line)
+    if remaining and lines:
+        lines[-1] = _truncate_display(lines[-1].rstrip() + "…", width)
+    return lines or [""]
+
+
+def _take_display_line(text: str, width: int) -> tuple[str, str]:
+    used = 0
+    split_at = 0
+    last_space = -1
+    for index, char in enumerate(text):
+        char_width = 2 if unicodedata.east_asian_width(char) in {"F", "W"} else 1
+        if used + char_width > width:
+            break
+        used += char_width
+        split_at = index + 1
+        if char.isspace():
+            last_space = index
+    else:
+        return text, ""
+
+    if last_space > 0:
+        split_at = last_space
+    split_at = max(split_at, 1)
+    return text[:split_at].rstrip(), text[split_at:].lstrip()
 
 
 def _format_elapsed(seconds: float) -> str:

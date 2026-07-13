@@ -128,6 +128,15 @@ def test_current_finance_tool_output_is_wrapped_as_untrusted_data() -> None:
     assert "当前 finance_* 工具" in SYSTEM_PROMPT
 
 
+def test_prompt_refuses_real_orders_and_requires_side_effect_evidence() -> None:
+    assert "明确拒绝真实交易" in SYSTEM_PROMPT
+    assert "不得把真实下单请求自动改写成纸面交易" in SYSTEM_PROMPT
+    assert "本轮成功工具结果" in SYSTEM_PROMPT
+    assert "被权限层拦截或工具失败时" in SYSTEM_PROMPT
+    assert "通知内容只能说" in SYSTEM_PROMPT
+    assert "真实下单已拒绝" in SYSTEM_PROMPT
+
+
 def test_permission_policy_layers_workspace_writes(tmp_path) -> None:  # noqa: ANN001
     workdir = tmp_path.resolve()
 
@@ -137,6 +146,64 @@ def test_permission_policy_layers_workspace_writes(tmp_path) -> None:  # noqa: A
     assert check("edit", {"path": str(workdir.parent / "evil.txt")}, workdir) == "deny"
     assert check("bash", {"command": "date"}, workdir) == "confirm"
     assert check("web_fetch", {"url": "https://example.com"}, workdir) == "confirm"
+
+
+def test_wechat_permission_allows_only_local_dry_run(monkeypatch, tmp_path) -> None:  # noqa: ANN001
+    workdir = tmp_path.resolve()
+    monkeypatch.delenv("FINANCE_WECHAT_MODE", raising=False)
+    monkeypatch.delenv("FINANCE_WECHAT_WEBHOOK", raising=False)
+    monkeypatch.delenv("FINANCE_WECHAT_RELAY_URL", raising=False)
+
+    assert check("wechat_send", {"content": "demo"}, workdir) == "allow"
+
+    monkeypatch.setenv("FINANCE_WECHAT_MODE", "dry-run")
+    assert check("wechat_send", {"content": "demo"}, workdir) == "allow"
+
+    monkeypatch.setenv("FINANCE_WECHAT_MODE", "webhook")
+    assert check("wechat_send", {"content": "demo"}, workdir) == "confirm"
+
+    monkeypatch.delenv("FINANCE_WECHAT_MODE")
+    monkeypatch.setenv("FINANCE_WECHAT_WEBHOOK", "https://example.invalid/hook")
+    assert check("wechat_send", {"content": "demo"}, workdir) == "confirm"
+
+
+def test_real_order_request_gets_deterministic_no_trade_notice() -> None:
+    loop = AgentLoop(CapturingBackend(summary="unused", answer="已买入100股茅台"), ToolRegistry(), SYSTEM_PROMPT)
+
+    answer = loop.run("帮我买100股茅台")
+
+    assert answer.startswith("交易边界：我不能执行真实证券下单")
+    assert "未产生真实成交" in answer
+
+
+def test_explicit_paper_trade_does_not_get_real_order_notice() -> None:
+    loop = AgentLoop(CapturingBackend(summary="unused", answer="已记录纸面持仓"), ToolRegistry(), SYSTEM_PROMPT)
+
+    answer = loop.run("模拟买入100股茅台")
+
+    assert answer == "已记录纸面持仓"
+
+
+def test_real_order_request_cannot_mutate_paper_portfolio(tmp_path) -> None:  # noqa: ANN001
+    calls: list[str] = []
+    registry = ToolRegistry()
+    registry.register(Tool(
+        name="finance_build_paper_portfolio",
+        description="test paper mutation",
+        parameters={"type": "object", "properties": {}},
+        run=lambda **kwargs: calls.append("ran") or "should not run",
+    ))
+    loop = AgentLoop(
+        ToolCallBackend("finance_build_paper_portfolio", {}),
+        registry,
+        SYSTEM_PROMPT,
+        workdir=tmp_path,
+    )
+
+    answer = loop.run("帮我买100股茅台")
+
+    assert not calls
+    assert "本轮未下单" in answer
 
 
 def test_agent_loop_blocks_confirm_tools_when_auto_approve_is_false(tmp_path) -> None:  # noqa: ANN001

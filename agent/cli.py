@@ -12,6 +12,7 @@ import os
 import re
 import shlex
 import sys
+from threading import Event, Lock, Thread
 from time import perf_counter
 
 from tools.base import build_default_registry
@@ -24,6 +25,7 @@ from agent.ui import (
     render_help,
     render_prompt,
     render_status_bar,
+    render_thinking_status,
     render_tool_card,
     render_trace,
     render_trace_summary,
@@ -139,6 +141,10 @@ class TracePrinter:
         self._current_tools: list[str] = []
         self._current_started: float | None = None
         self._last_lines: list[str] = []
+        self._live_status = ""
+        self._live_stop = Event()
+        self._live_lock = Lock()
+        self._live_thread: Thread | None = None
 
     def observe(self, event, payload):
         if self._mode() == "off":
@@ -146,33 +152,60 @@ class TracePrinter:
         if event == "model_start":
             turn = int(payload.get("turn") or 0)
             self._model_started[turn] = perf_counter()
-            self._emit(render_trace("model turn", str(turn)))
+            self._emit(render_trace("model turn", str(turn)), status=f"planning model turn {turn}")
         elif event == "model_end":
             turn = int(payload.get("turn") or 0)
             elapsed = _elapsed(self._model_started.pop(turn, None))
             calls = payload.get("tool_calls") or []
             if calls:
-                self._emit(render_trace("selected tools", ", ".join(calls), elapsed=elapsed))
+                self._emit(
+                    render_trace("selected tools", ", ".join(calls), elapsed=elapsed),
+                    status=f"selected {len(calls)} tools",
+                )
             elif payload.get("content_preview"):
-                self._emit(render_trace("model answer", payload["content_preview"], elapsed=elapsed))
+                self._emit(
+                    render_trace("model answer", payload["content_preview"], elapsed=elapsed),
+                    status="preparing answer",
+                )
         elif event == "model_error":
             turn = int(payload.get("turn") or 0)
             elapsed = _elapsed(self._model_started.pop(turn, None))
-            self._emit(render_trace("model error", str(payload.get("error") or "unknown"), elapsed=elapsed))
+            self._emit(
+                render_trace("model error", str(payload.get("error") or "unknown"), elapsed=elapsed),
+                status="model error",
+            )
         elif event == "tool_start":
             name = str(payload.get("name") or "unknown")
             self._tool_started[name] = perf_counter()
-            self._emit(render_tool_card(name, "running", _json_preview(payload.get("arguments", {}))), tool=name)
+            arguments = _json_preview(payload.get("arguments", {}))
+            self._emit(
+                render_tool_card(name, "running", arguments),
+                tool=name,
+                status=self._tool_status("running", name, arguments),
+            )
         elif event == "tool_end":
             name = str(payload.get("name") or "unknown")
             elapsed = _elapsed(self._tool_started.pop(name, None))
-            self._emit(render_tool_card(name, "done", str(payload.get("preview") or ""), elapsed=elapsed), tool=name)
+            preview = str(payload.get("preview") or "")
+            self._emit(
+                render_tool_card(name, "done", preview, elapsed=elapsed),
+                tool=name,
+                status=self._tool_status("done", name, preview),
+            )
         elif event == "tool_error":
             name = str(payload.get("name") or "unknown")
             elapsed = _elapsed(self._tool_started.pop(name, None))
-            self._emit(render_tool_card(name, "error", str(payload.get("error") or ""), elapsed=elapsed), tool=name)
+            error = str(payload.get("error") or "")
+            self._emit(
+                render_tool_card(name, "error", error, elapsed=elapsed),
+                tool=name,
+                status=self._tool_status("error", name, error),
+            )
         elif event == "context_compacted":
-            self._emit(render_trace("context compacted", f"{payload.get('messages')} messages retained"))
+            self._emit(
+                render_trace("context compacted", f"{payload.get('messages')} messages retained"),
+                status="compacting context",
+            )
 
     def command(self, event: str, detail: str) -> None:
         if self._mode() == "off":
@@ -180,23 +213,33 @@ class TracePrinter:
         name, rest = _split_trace_detail(detail)
         if event == "tool":
             self._command_tool_started = (name, perf_counter())
-            self._emit(render_tool_card(name, "running", rest), tool=name)
+            self._emit(
+                render_tool_card(name, "running", rest),
+                tool=name,
+                status=self._tool_status("running", name, rest),
+            )
             return
         if event == "tool result":
             elapsed = None
             if self._command_tool_started and self._command_tool_started[0] == name:
                 elapsed = _elapsed(self._command_tool_started[1])
                 self._command_tool_started = None
-            self._emit(render_tool_card(name, "done", rest, elapsed=elapsed), tool=name)
+            self._emit(
+                render_tool_card(name, "done", rest, elapsed=elapsed),
+                tool=name,
+                status=self._tool_status("done", name, rest),
+            )
             return
-        self._emit(render_trace(event, detail))
+        self._emit(render_trace(event, detail), status=event)
 
     def flush(self) -> None:
         if not self._current_lines:
+            self._stop_live()
             return
         elapsed = _elapsed(self._current_started)
         self._last_lines = list(self._current_lines)
-        if self._mode() == "compact":
+        had_live = self._stop_live()
+        if self._mode() == "compact" or had_live:
             print(render_trace_summary(len(self._current_lines), self._current_tools, elapsed=elapsed))
         self._current_lines = []
         self._current_tools = []
@@ -207,14 +250,57 @@ class TracePrinter:
             return "暂无可展开的 thinking 轨迹。"
         return "\n".join(self._last_lines)
 
-    def _emit(self, line: str, tool: str | None = None) -> None:
+    def _emit(self, line: str, tool: str | None = None, status: str = "thinking") -> None:
         if self._current_started is None:
             self._current_started = perf_counter()
         self._current_lines.append(line)
         if tool and tool not in self._current_tools:
             self._current_tools.append(tool)
-        if self._mode() == "on":
+        if self._live_enabled():
+            self._set_live(status)
+        elif self._mode() == "on":
             print(line)
+
+    def _tool_status(self, state: str, name: str, detail: str) -> str:
+        if self._mode() == "on" and detail:
+            return f"{state} {name} · {_preview(detail, 100)}"
+        return f"{state} {name}"
+
+    def _live_enabled(self) -> bool:
+        return self._mode() == "compact" and bool(getattr(sys.stdout, "isatty", lambda: False)())
+
+    def _set_live(self, status: str) -> None:
+        with self._live_lock:
+            self._live_status = status
+        if self._live_thread is None or not self._live_thread.is_alive():
+            self._live_stop.clear()
+            self._live_thread = Thread(target=self._live_loop, name="finance-agent-trace", daemon=True)
+            self._live_thread.start()
+
+    def _live_loop(self) -> None:
+        frames = ("·", "•", "●", "•")
+        index = 0
+        while not self._live_stop.is_set():
+            with self._live_lock:
+                status = self._live_status
+            elapsed = _elapsed(self._current_started) or 0.0
+            line = render_thinking_status(status, elapsed=elapsed, frame=frames[index % len(frames)])
+            sys.stdout.write("\r\033[2K" + line)
+            sys.stdout.flush()
+            index += 1
+            self._live_stop.wait(0.12)
+
+    def _stop_live(self) -> bool:
+        thread = self._live_thread
+        if thread is None:
+            return False
+        self._live_stop.set()
+        thread.join(timeout=0.5)
+        self._live_thread = None
+        if bool(getattr(sys.stdout, "isatty", lambda: False)()):
+            sys.stdout.write("\r\033[2K")
+            sys.stdout.flush()
+        return True
 
     def _mode(self) -> str:
         value = self.mode()
@@ -418,7 +504,7 @@ def _runtime_bottom_toolbar(think_mode: str, agent, finance, dynamic: DynamicSla
     mcp = f"{connected}/{len(statuses)}" if statuses else "0/0"
     model = getattr(agent.backend, "model", agent.backend.__class__.__name__)
     return render_status_bar(
-        mode=think_mode,
+        mode="trace on" if think_mode == "on" else "trace off",
         model=str(model),
         data_sources=data_sources,
         skills=len(dynamic.skills),
