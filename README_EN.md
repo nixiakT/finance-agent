@@ -242,6 +242,10 @@ Optional environment variables:
 DEEPSEEK_API_KEY=...
 DEEPSEEK_BASE_URL=https://api.deepseek.com
 DEEPSEEK_MODEL=deepseek-chat
+# GPT-5.6 Sol + xhigh requires the Responses API:
+# DEEPSEEK_MODEL=gpt-5.6-sol
+# DEEPSEEK_API_MODE=responses
+# DEEPSEEK_REASONING_EFFORT=xhigh
 ALPHAVANTAGE_API_KEY=...
 TUSHARE_TOKEN=...
 FINANCE_ALLOW_SAMPLE_FALLBACK=0

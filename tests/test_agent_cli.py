@@ -816,6 +816,7 @@ def test_deepseek_backend_hides_and_blocks_deterministic_route(monkeypatch: pyte
             return Response({"content": "hidden tool was blocked", "tool_calls": []})
 
     http = HTTPClient()
+    monkeypatch.setenv("DEEPSEEK_API_MODE", "chat_completions")
     monkeypatch.setattr(client_module, "load_local_env", lambda: None)
     monkeypatch.setattr(client_module, "http_client", lambda **kwargs: http)
     backend = client_module.DeepSeekBackend(api_key="test-key")
@@ -851,6 +852,76 @@ def test_deepseek_backend_hides_and_blocks_deterministic_route(monkeypatch: pyte
     assert "finance_generate_report" not in visible_names
     assert side_effects == []
     assert "未向当前模型公开" in payloads[1]["messages"][-1]["content"]
+
+
+def test_responses_backend_uses_xhigh_and_normalizes_tool_calls(monkeypatch: pytest.MonkeyPatch) -> None:
+    import backend.client as client_module
+
+    payloads: list[dict[str, Any]] = []
+
+    class Response:
+        def raise_for_status(self) -> None:
+            return None
+
+        def json(self) -> dict[str, Any]:
+            return {
+                "output": [{
+                    "type": "function_call",
+                    "call_id": "call_quote",
+                    "name": "finance_get_quote",
+                    "arguments": '{"symbol":"AAPL"}',
+                }]
+            }
+
+    class HTTPClient:
+        def post(self, url, headers, json):  # noqa: ANN001, ANN201
+            assert url.endswith("/v1/responses")
+            payloads.append(json)
+            return Response()
+
+    monkeypatch.setenv("DEEPSEEK_API_MODE", "responses")
+    monkeypatch.setenv("DEEPSEEK_REASONING_EFFORT", "xhigh")
+    monkeypatch.setattr(client_module, "load_local_env", lambda: None)
+    monkeypatch.setattr(client_module, "http_client", lambda **kwargs: HTTPClient())
+    backend = client_module.DeepSeekBackend(api_key="test-key", model="gpt-5.6-sol")
+
+    result = backend.chat(
+        [{"role": "system", "content": "system"}, {"role": "user", "content": "quote AAPL"}],
+        tools=[{
+            "type": "function",
+            "function": {
+                "name": "finance_get_quote",
+                "description": "Get quote",
+                "parameters": {"type": "object", "properties": {"symbol": {"type": "string"}}},
+            },
+        }],
+    )
+
+    assert payloads[0]["model"] == "gpt-5.6-sol"
+    assert payloads[0]["reasoning"] == {"effort": "xhigh"}
+    assert payloads[0]["tools"][0]["name"] == "finance_get_quote"
+    assert result["tool_calls"] == [{
+        "id": "call_quote", "name": "finance_get_quote", "arguments": {"symbol": "AAPL"},
+    }]
+
+
+def test_responses_input_replays_function_call_and_output() -> None:
+    from backend.client import DeepSeekBackend
+
+    items = DeepSeekBackend._to_responses_input([
+        {"role": "assistant", "content": "", "tool_calls": [{
+            "id": "call_quote", "name": "finance_get_quote", "arguments": {"symbol": "AAPL"},
+        }]},
+        {"role": "tool", "tool_call_id": "call_quote", "name": "finance_get_quote", "content": "315.32"},
+    ])
+
+    assert items[0] == {
+        "type": "function_call", "call_id": "call_quote",
+        "name": "finance_get_quote", "arguments": '{"symbol": "AAPL"}',
+    }
+    assert items[1] == {
+        "type": "function_call_output", "call_id": "call_quote", "output": "315.32",
+    }
 
 
 def test_finance_memory_sanitizes_secrets(tmp_path: Any) -> None:
