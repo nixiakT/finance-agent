@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from datetime import date, timedelta
 
 import pytest
@@ -220,6 +221,60 @@ def test_paper_portfolio_constructs_and_marks_account(tmp_path) -> None:  # noqa
     assert sold.transactions[-1]["realized_pnl"] > 0
     assert "每日买卖盈亏" in daily
     assert "已实现盈亏" in daily
+
+
+def test_portfolio_migrates_legacy_account_to_persistent_dir(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:  # noqa: ANN001
+    import finance.paper_portfolio as portfolio
+
+    legacy_dir = tmp_path / "project" / ".finance_agent"
+    persistent_dir = tmp_path / "home" / ".finance-agent" / "portfolios"
+    portfolio.create_account(initial_cash=123_456, base_dir=legacy_dir)
+    monkeypatch.setattr(portfolio, "LEGACY_PORTFOLIO_DIR", legacy_dir)
+    monkeypatch.setattr(portfolio, "DEFAULT_PORTFOLIO_DIR", persistent_dir)
+    monkeypatch.setattr(portfolio, "PORTFOLIO_DIR", persistent_dir)
+
+    account = portfolio.load_account()
+
+    assert account.initial_cash == 123_456
+    assert (persistent_dir / "portfolio_default.json").exists()
+
+
+def test_portfolio_overwrite_creates_recovery_backup(tmp_path) -> None:  # noqa: ANN001
+    import finance.paper_portfolio as portfolio
+
+    portfolio.create_account(initial_cash=123_456, base_dir=tmp_path)
+    portfolio.create_account(initial_cash=999_999, overwrite=True, base_dir=tmp_path)
+
+    backups = list((tmp_path / "backups").glob("portfolio_default_*.json"))
+    assert len(backups) == 1
+    assert json.loads(backups[0].read_text(encoding="utf-8"))["initial_cash"] == 123_456
+
+
+def test_daily_pnl_uses_reported_totals_for_recovered_ledger() -> None:
+    from finance.paper_portfolio import PortfolioAccount
+
+    account = PortfolioAccount(
+        name="recovered",
+        initial_cash=1_000_000,
+        cash=100_000,
+        transactions=[{
+            "as_of": "2026-07-09T03:00:00Z", "action": "SELL", "symbol": "MSFT",
+            "amount": None, "realized_pnl": -2_728,
+        }],
+        history=[{
+            "as_of": "2026-07-09T03:05:36Z", "event": "recovered_rebalance",
+            "total_value": 1_009_905.90, "return_pct": 0.99059,
+            "reported_buy_amount": 635_811.28, "reported_sell_amount": 631_415.52,
+            "reported_realized_pnl": 7_533.53, "reported_trade_count": 8,
+        }],
+    )
+
+    output = render_daily_pnl(account)
+
+    assert "635,811.28" in output
+    assert "631,415.52" in output
+    assert "7,533.53" in output
+    assert "| 8 |" in output
 
 
 def test_paper_portfolio_rebalance_preserves_cost_basis(tmp_path) -> None:  # noqa: ANN001

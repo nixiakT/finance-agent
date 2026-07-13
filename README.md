@@ -183,6 +183,7 @@ FINANCE_AGENT_LANG=en python -m agent.cli /help
 
 ```bash
 FINANCE_WECHAT_MODE=dry-run
+FINANCE_PORTFOLIO_DIR=~/.finance-agent/portfolios
 # FINANCE_WECHAT_WEBHOOK=<paste-full-wecom-webhook-url-in-.env.local>
 # FINANCE_WECHAT_RELAY_URL=http://127.0.0.1:8765/wechat/send
 ```
@@ -217,7 +218,7 @@ FINANCE_WECHAT_MODE=dry-run
 
 历史学习预测会把历史 K 线切成 walk-forward 样本，学习当前特征桶在历史上对应的未来收益和胜率。`/learn-history AAPL 2y 20` 会输出方向、置信度、样本数和匹配特征，把结果写入 `.finance_agent/history_learning.jsonl`，同时更新 `skills/finance-history-learning/SKILL.md` 并记录一条可到期评分的预测。
 
-模拟投资账户会写入 `.finance_agent/portfolio_default.json`。`/portfolio init 1000000 AAPL MSFT NVDA` 会根据当前行情、基本面、技术面和数据源置信度生成纸面持仓并记录 BUY 交易；评分会拆成动量、质量、风险和数据置信度，弱相对强度会被明确降权。`/portfolio review GOOGL AVGO ...` 会只读诊断当前持仓、弱项和替换候选，不会改仓；`/portfolio mark` 会按最新价格追加一条净值记录；`/portfolio sell AMD all <理由>` 会模拟卖出并记录 SELL、实现盈亏和理由；`/portfolio trades` 查看交易流水；`/portfolio pnl` 按天汇总买入额、卖出额、已实现盈亏、期末净值和当日净值变化；`/portfolio rebalance ...` 会用新的股票池重新计算仓位并记录买卖差额。它只做纸面组合，不会连接真实券商或真实下单。
+模拟投资账户默认持久化到 `~/.finance-agent/portfolios/portfolio_default.json`，不受启动目录、新终端或代码 worktree 影响。首次运行会自动迁移旧的 `.finance_agent/portfolio_default.json`；重新初始化前会在 `backups/` 保留时间戳备份。可用 `FINANCE_PORTFOLIO_DIR` 指定其他持久化目录。`/portfolio init 1000000 AAPL MSFT NVDA` 会根据当前行情、基本面、技术面和数据源置信度生成纸面持仓并记录 BUY 交易；评分会拆成动量、质量、风险和数据置信度，弱相对强度会被明确降权。`/portfolio review GOOGL AVGO ...` 会只读诊断当前持仓、弱项和替换候选，不会改仓；`/portfolio mark` 会按最新价格追加一条净值记录；`/portfolio sell AMD all <理由>` 会模拟卖出并记录 SELL、实现盈亏和理由；`/portfolio trades` 查看交易流水；`/portfolio pnl` 按天汇总买入额、卖出额、已实现盈亏、期末净值和当日净值变化；`/portfolio rebalance ...` 会用新的股票池重新计算仓位并记录买卖差额。它只做纸面组合，不会连接真实券商或真实下单。
 
 微信定时推送采用本地文件任务表 `.finance_agent/scheduled_jobs.json`。`/schedule portfolio default 1440` 可以每天给纸面组合估值并推送到微信连接器或 dry-run outbox。创建任务后，需要用 cron、launchd 或手动定期执行：
 

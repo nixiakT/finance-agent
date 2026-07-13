@@ -3,6 +3,8 @@ from __future__ import annotations
 
 import json
 import math
+import os
+import shutil
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
 from pathlib import Path
@@ -11,7 +13,11 @@ from typing import Any, Callable
 from .models import Quote, StockSnapshot
 
 
-PORTFOLIO_DIR = Path(".finance_agent")
+LEGACY_PORTFOLIO_DIR = Path.cwd() / ".finance_agent"
+DEFAULT_PORTFOLIO_DIR = Path(
+    os.getenv("FINANCE_PORTFOLIO_DIR", Path.home() / ".finance-agent" / "portfolios")
+).expanduser()
+PORTFOLIO_DIR = DEFAULT_PORTFOLIO_DIR
 DEFAULT_ACCOUNT = "default"
 
 
@@ -53,7 +59,13 @@ class CandidateScore:
 
 def account_path(name: str = DEFAULT_ACCOUNT, base_dir: Path | None = None) -> Path:
     clean = "".join(ch for ch in (name or DEFAULT_ACCOUNT) if ch.isalnum() or ch in {"-", "_"}) or DEFAULT_ACCOUNT
-    return (base_dir or PORTFOLIO_DIR) / f"portfolio_{clean}.json"
+    path = (base_dir or PORTFOLIO_DIR) / f"portfolio_{clean}.json"
+    if base_dir is None and PORTFOLIO_DIR == DEFAULT_PORTFOLIO_DIR and not path.exists():
+        legacy_path = LEGACY_PORTFOLIO_DIR / path.name
+        if legacy_path.exists():
+            path.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(legacy_path, path)
+    return path
 
 
 def create_account(
@@ -66,6 +78,8 @@ def create_account(
     path = account_path(name, base_dir)
     if path.exists() and not overwrite:
         return load_account(name, base_dir)
+    if path.exists() and overwrite:
+        _backup_account(path)
     now = _iso_now()
     account = PortfolioAccount(
         name=name,
@@ -109,8 +123,19 @@ def save_account(account: PortfolioAccount, base_dir: Path | None = None) -> Pat
         "created_at": account.created_at,
         "updated_at": account.updated_at,
     }
-    path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    temporary = path.with_suffix(path.suffix + ".tmp")
+    temporary.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    temporary.replace(path)
     return path
+
+
+def _backup_account(path: Path) -> Path:
+    backup_dir = path.parent / "backups"
+    backup_dir.mkdir(parents=True, exist_ok=True)
+    stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%S%fZ")
+    backup = backup_dir / f"{path.stem}_{stamp}{path.suffix}"
+    shutil.copy2(path, backup)
+    return backup
 
 
 def score_candidates(snapshots: list[StockSnapshot]) -> list[CandidateScore]:
@@ -843,10 +868,23 @@ def _daily_pnl_rows(account: PortfolioAccount) -> list[dict[str, Any]]:
         row = days[day]
         history = history_by_day.get(day) or []
         if history:
-            ending = float(history[-1].get("total_value") or 0)
+            latest = history[-1]
+            ending = float(latest.get("total_value") or 0)
             row["ending_value"] = ending
             row["nav_change"] = 0.0 if previous_value is None else ending - previous_value
             previous_value = ending
+            # Imported/recovered ledgers may know audited daily totals without
+            # retaining every original fill. Prefer those explicit totals over
+            # inventing a per-trade allocation.
+            for source_key, target_key in (
+                ("reported_buy_amount", "buy_amount"),
+                ("reported_sell_amount", "sell_amount"),
+                ("reported_realized_pnl", "realized_pnl"),
+                ("reported_trade_count", "trade_count"),
+                ("reported_nav_change", "nav_change"),
+            ):
+                if latest.get(source_key) is not None:
+                    row[target_key] = float(latest[source_key])
         else:
             row["ending_value"] = None
             row["nav_change"] = None

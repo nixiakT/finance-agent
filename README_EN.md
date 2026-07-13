@@ -183,6 +183,7 @@ WeChat delivery uses an adapter pattern:
 
 ```bash
 FINANCE_WECHAT_MODE=dry-run
+FINANCE_PORTFOLIO_DIR=~/.finance-agent/portfolios
 # FINANCE_WECHAT_WEBHOOK=<paste-full-wecom-webhook-url-in-.env.local>
 # FINANCE_WECHAT_RELAY_URL=http://127.0.0.1:8765/wechat/send
 ```
@@ -217,7 +218,7 @@ The prediction scoring loop writes calls to `.finance_agent/predictions.jsonl`, 
 
 Historical learning turns historical candles into walk-forward samples and checks how the current feature buckets performed in the past. `/learn-history AAPL 2y 20` outputs direction, confidence, sample count, and matched features, appends the result to `.finance_agent/history_learning.jsonl`, updates `skills/finance-history-learning/SKILL.md`, and records a forecast for future scoring.
 
-The paper investment account writes to `.finance_agent/portfolio_default.json`. `/portfolio init 1000000 AAPL MSFT NVDA` builds paper holdings from current quotes, fundamentals, indicators, and data-source confidence, and records BUY transactions. Scoring is split into momentum, quality, risk, and data confidence, with weak relative strength penalized explicitly. `/portfolio review GOOGL AVGO ...` performs a read-only review of current holdings, weak positions, and replacement candidates; `/portfolio mark` appends a NAV record using latest prices; `/portfolio sell AMD all <reason>` simulates a SELL with realized PnL and reason; `/portfolio trades` shows the trade ledger; `/portfolio pnl` summarizes daily buy amount, sell amount, realized PnL, ending NAV, and NAV change; `/portfolio rebalance ...` recalculates allocation from a new stock pool and records the buy/sell differences. It is paper-only and never connects to a broker or sends real orders.
+The paper investment account persists to `~/.finance-agent/portfolios/portfolio_default.json`, independent of the launch directory, terminal, or code worktree. On first use, the old `.finance_agent/portfolio_default.json` is migrated automatically. Reinitializing an account creates a timestamped copy under `backups/`. Set `FINANCE_PORTFOLIO_DIR` to choose another persistent location. `/portfolio init 1000000 AAPL MSFT NVDA` builds paper holdings from current quotes, fundamentals, indicators, and data-source confidence, and records BUY transactions. Scoring is split into momentum, quality, risk, and data confidence, with weak relative strength penalized explicitly. `/portfolio review GOOGL AVGO ...` performs a read-only review of current holdings, weak positions, and replacement candidates; `/portfolio mark` appends a NAV record using latest prices; `/portfolio sell AMD all <reason>` simulates a SELL with realized PnL and reason; `/portfolio trades` shows the trade ledger; `/portfolio pnl` summarizes daily buy amount, sell amount, realized PnL, ending NAV, and NAV change; `/portfolio rebalance ...` recalculates allocation from a new stock pool and records the buy/sell differences. It is paper-only and never connects to a broker or sends real orders.
 
 Scheduled WeChat delivery uses `.finance_agent/scheduled_jobs.json`. `/schedule portfolio default 1440` can mark the paper portfolio daily and send it to the WeChat connector or dry-run outbox. Create jobs with `/schedule brief` or `/schedule portfolio`, then run due jobs manually or through cron/launchd:
 
