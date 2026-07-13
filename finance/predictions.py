@@ -125,10 +125,20 @@ def evaluate_due_predictions(
     for record in records:
         if record.evaluated_at:
             continue
-        if not include_not_due and _parse_iso(record.due_at) > current:
+        try:
+            due_at = _parse_iso(record.due_at)
+        except (TypeError, ValueError):
+            due_at = datetime.min.replace(tzinfo=UTC)
+        if not include_not_due and due_at > current:
             continue
-        price, as_of = get_price(record.symbol)
-        evaluate_prediction(record, evaluation_price=price, evaluated_at=as_of or _iso(current))
+        try:
+            price, as_of = get_price(record.symbol)
+            evaluate_prediction(record, evaluation_price=price, evaluated_at=as_of or _iso(current))
+        except Exception as exc:  # noqa: BLE001 - one bad quote must not abort the ledger
+            record.notes = f"evaluation failed: {exc}"
+            record.hit = None
+            record.score = None
+            record.return_pct = None
         evaluated.append(record)
         changed = True
     if changed:

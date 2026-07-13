@@ -558,13 +558,32 @@ class AKShareProvider:
     def get_financials(self, symbol: str) -> Financials:
         normalized, code = self._require_a_share(symbol)
         quote = self.get_quote(normalized)
-        notes = ["AKShare financial provider currently uses spot valuation fields; detailed statements are future work."]
+        details: dict[str, Any] = {}
+        ak = self._client()
+        if hasattr(ak, "stock_financial_analysis_indicator"):
+            try:
+                data = ak.stock_financial_analysis_indicator(symbol=code)
+                if data is not None and not data.empty:
+                    details = data.iloc[0].to_dict()
+            except Exception:
+                details = {}
+        revenue = _first_float(details, "营业总收入", "营业收入", "主营业务收入")
+        net_income = _first_float(details, "归属母公司股东的净利润", "净利润")
+        notes = ["AKShare detailed A-share fields depend on upstream reporting availability."]
         return Financials(
             symbol=normalized,
             source=self.name,
             as_of=utc_now_iso(),
             market_cap=quote.market_cap,
             pe_ratio=quote.pe_ratio,
+            eps=_first_float(details, "基本每股收益", "加权每股收益", "摊薄每股收益"),
+            revenue=revenue,
+            gross_profit=_first_float(details, "毛利润", "营业毛利"),
+            net_income=net_income,
+            free_cash_flow=_first_float(details, "每股经营性现金流", "经营活动产生的现金流量净额"),
+            debt_to_equity=_first_float(details, "资产负债率", "产权比率"),
+            return_on_equity=_percent_ratio(details, "净资产收益率", "加权净资产收益率"),
+            profit_margin=(net_income / revenue if net_income is not None and revenue else _percent_ratio(details, "销售净利率")),
             notes=notes,
         )
 
@@ -733,7 +752,31 @@ class ProviderChain:
         return self._first("get_history", symbol, period, interval)
 
     def get_financials(self, symbol: str) -> Financials:
-        return self._first("get_financials", symbol)
+        errors: list[str] = []
+        candidates: list[Financials] = []
+        for provider in self.providers:
+            try:
+                result = provider.get_financials(symbol)
+                if result:
+                    candidates.append(result)
+                else:
+                    errors.append(f"{provider.name}: empty result")
+            except Exception as exc:  # noqa: BLE001 - retain partial data from later providers
+                errors.append(f"{provider.name}: {exc}")
+        if not candidates:
+            raise ProviderError("; ".join(errors))
+
+        real = [item for item in candidates if item.source != "SAMPLE_FALLBACK"]
+        pool = real or candidates
+        best = max(pool, key=_financial_quality)
+        for candidate in pool:
+            if candidate is best:
+                continue
+            _merge_financials(best, candidate)
+        if len({item.source for item in pool}) > 1:
+            best.source = "+".join(dict.fromkeys(item.source for item in pool))
+            best.notes.append("Fundamentals merged across providers to fill missing fields.")
+        return best
 
     def get_news(self, symbol: str, limit: int = 5) -> list[NewsItem]:
         return self._first("get_news", symbol, limit)
@@ -763,6 +806,27 @@ class ProviderChain:
                 detail = "demo-only fallback"
             rows.append({"name": provider.name, "status": status, "detail": detail})
         return rows
+
+
+def _financial_quality(financials: Financials) -> int:
+    fields = (
+        "market_cap", "pe_ratio", "forward_pe", "eps", "revenue", "gross_profit",
+        "net_income", "free_cash_flow", "debt_to_equity", "return_on_equity", "profit_margin",
+    )
+    return sum(getattr(financials, field) is not None for field in fields)
+
+
+def _merge_financials(target: Financials, fallback: Financials) -> None:
+    fields = (
+        "market_cap", "pe_ratio", "forward_pe", "eps", "revenue", "gross_profit",
+        "net_income", "free_cash_flow", "debt_to_equity", "return_on_equity", "profit_margin",
+    )
+    for field in fields:
+        if getattr(target, field) is None and getattr(fallback, field) is not None:
+            setattr(target, field, getattr(fallback, field))
+    for note in fallback.notes:
+        if note not in target.notes:
+            target.notes.append(note)
 
 
 def export_history_csv(candles: list[Candle]) -> str:
@@ -802,6 +866,21 @@ def _percent_to_float(value: Any) -> float | None:
     if isinstance(value, str):
         value = value.replace("%", "")
     return _to_float(value)
+
+
+def _first_float(row: dict[str, Any], *names: str) -> float | None:
+    for name in names:
+        value = _to_float(row.get(name))
+        if value is not None:
+            return value
+    return None
+
+
+def _percent_ratio(row: dict[str, Any], *names: str) -> float | None:
+    value = _first_float(row, *names)
+    if value is None:
+        return None
+    return value / 100 if abs(value) > 1 else value
 
 
 def _list_float(values: list[Any] | None, index: int) -> float | None:

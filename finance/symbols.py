@@ -112,7 +112,13 @@ def extract_symbols(text: str) -> list[str]:
             found.append(normalized)
 
     unique: list[str] = []
+    seen: set[str] = set()
     for symbol in found:
-        if symbol not in unique:
-            unique.append(symbol)
+        # HK display codes may contain four or five digits (0700.HK/00700.HK),
+        # but both address the same Yahoo market symbol and must not duplicate a report.
+        key = to_yahoo_symbol(symbol)
+        if key in seen:
+            continue
+        seen.add(key)
+        unique.append(symbol)
     return unique
