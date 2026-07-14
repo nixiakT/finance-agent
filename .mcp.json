@@ -1,0 +1,16 @@
+{
+  "mcpServers": {
+    "echo": {
+      "command": "python",
+      "args": ["-m", "mcp.echo_server"],
+      "cwd": ".",
+      "timeoutSeconds": 10
+    },
+    "finance": {
+      "command": "python",
+      "args": ["-m", "mcp.finance_server"],
+      "cwd": ".",
+      "timeoutSeconds": 10
+    }
+  }
+}

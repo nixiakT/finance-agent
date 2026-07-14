@@ -57,6 +57,7 @@ _COMMANDS = (
     CommandSpec("fetch", "/fetch https://example.com", "抓取并核验网页", "fetch and inspect a page", "research"),
     CommandSpec("proxy", "/proxy status|test|set|off", "管理查询代理", "manage query proxy", "workflow"),
     CommandSpec("wechat", "/wechat status|send|send-md", "管理微信连接", "manage WeChat connector", "workflow"),
+    CommandSpec("remember", "/remember <长期项目约定>", "保存或查看跨会话项目记忆", "save or show persistent project memory", "workflow"),
     CommandSpec("memory", "/memory list|add", "查看或新增研究记忆", "list or add research memory", "workflow"),
     CommandSpec("evolve", "/evolve <复盘>", "沉淀研究经验", "save research learning", "workflow"),
     CommandSpec("predict", "/predict record|list|eval|learn", "记录和评估预测", "record and score predictions", "workflow"),

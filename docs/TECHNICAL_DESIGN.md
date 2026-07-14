@@ -10,7 +10,9 @@
 4. `agent/command_catalog.py` + `agent/custom_commands.py` + `agent/dynamic_commands.py`: 统一命令目录、Markdown 自定义命令，以及 Skill/MCP prompt 的运行时发现。
 5. `mcp/`: 多 stdio MCP client 运行时和 echo 示例 server，MCP 工具按 server 命名空间注册进主循环。
 6. `skills/`: Skill 目录、校验器和只读 `read_skill` 按需加载工具。
-7. `tools/security.py`: 权限分层、安全拦截和不可信内容隔离。
+7. `agent/memory.py`: `MEMORY.md` 与结构化 KV 项目记忆，跨进程召回并注入 system prompt。
+8. `agent/usage.py`: 模型 token usage 归一化、任务级累计与可选成本估算。
+9. `tools/security.py`: 权限分层、安全拦截和不可信内容隔离。
 
 ## 关键设计
 
@@ -48,6 +50,20 @@
 
 自然语言入口不根据测评题、固定股票或关键词在模型前切换路径。`AgentLoop` 会记录本轮工具回执：真实交易始终被执行层拒绝，`wechat_send` 必须在成功的 `wechat_status` 之后执行，而且只有返回 `queued` / `sent` 才能声称已发送；多标的预测记录也必须每个标的都有成功的 `prediction_record` id。
 
+### 规划与待办
+
+`task_list` 把长任务状态写入工作区内 `.agent_task_list`。system policy 要求预计 4 个以上独立步骤、涉及多个文件/工具或用户明确要求规划时，第一步先建立待办；完成一步即更新，工具失败时记录原因并增加替代路线。它不是另一个硬编码业务流程，而是给 ReAct 主循环一个可观察、可恢复的外部任务状态。
+
+### 跨会话记忆
+
+`agent/memory.py` 提供两类持久状态：`Memory` 追加写入项目根目录 `MEMORY.md`；`KVMemory` 写入忽略目录 `.finance_agent/project_memory.json` 并支持按 key 覆盖和遗忘。`remember/memory_set/memory_forget` 作为受限工具注册，写入前脱敏常见 key/token/password。启动时 `build_system_prompt()` 召回记忆，并明确记忆不能覆盖原始 system、安全和金融风控规则。
+
+### 可观测性与成本
+
+DeepSeek OpenAI-compatible 响应中的 `usage` 不再被 Backend 丢弃。`AgentLoop` 在每个 `model_end` 事件发出 prompt/completion/total token，`TracePrinter` 按任务累计：默认折叠摘要显示耗时、步骤、工具和总 token；`/trace on` 保留单轮 token；任务后 `/trace` 可回放详情。
+
+配置 `DEEPSEEK_INPUT_PRICE_PER_MILLION` 与 `DEEPSEEK_OUTPUT_PRICE_PER_MILLION` 后，trace 额外显示估算美元成本；不配置时只报告服务端返回的真实 token，避免硬编码会变化的模型价格。`eval/tracer.py` 支持 JSONL 回放，`eval/metrics.py` 统一计算成功率、平均步骤、平均 token 和 JSON 合法率。
+
 ### CLI 与动态命令
 
 `agent/command_catalog.py` 是内置 slash command 的单一信息源：帮助页和补全菜单都由同一组 `CommandSpec` 生成，不再分别维护。`prompt_toolkit` 使用带类型和描述的模糊补全；`DynamicSlashCommands` 启动时完成首次发现，并在打开补全或执行动态命令前 `refresh()`，因此会话中新增的命令、Skill 和 MCP prompt 无需重启即可出现。合并内容包括：
@@ -73,7 +89,7 @@ Markdown 命令支持 frontmatter `description` / `argument-hint` 和 `$1`、`$2
 - `prompts/list`
 - `prompts/get`
 
-项目根目录的 `.mcp.json` 可配置多个 stdio server：
+项目根目录的 `.mcp.json` 默认连接教学 echo 和领域 `mcp.finance_server`。后者暴露 `mcp__finance__risk_budget`，根据资金、单笔风险、入场价和止损价确定性计算最大股数与仓位，不访问券商、不发送订单。也可以继续配置其他 stdio server：
 
 ```json
 {

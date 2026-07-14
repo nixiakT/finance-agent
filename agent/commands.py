@@ -25,6 +25,7 @@ from finance.predictions import (
     select_due_close,
 )
 from finance.web import web_fetch, web_search
+from agent.memory import Memory
 from agent.ui import current_lang
 from skills.loader import load_skills
 from scheduler.jobs import add_job, list_jobs, render_jobs, run_due_jobs
@@ -96,6 +97,8 @@ class CommandRouter:
             return CommandResult(True, self._proxy(args))
         if command == "/wechat":
             return CommandResult(True, self._wechat(args))
+        if command == "/remember":
+            return CommandResult(True, self._remember(args))
         if command == "/memory":
             return CommandResult(True, self._memory(args))
         if command == "/evolve":
@@ -415,6 +418,16 @@ class CommandRouter:
             path = add_memory(content, category="preference", source="cli")
             return self._with_result_trace("finance_memory_add", f"已写入金融记忆: {path}")
         return _msg("Usage: /memory list [limit] | /memory add <note>", "用法：/memory list [条数] | /memory add <记忆内容>")
+
+    def _remember(self, args: list[str]) -> str:
+        memory = Memory()
+        if not args:
+            recalled = memory.recall().strip()
+            return recalled or _msg("Project memory is empty.", "项目长期记忆为空。")
+        note = " ".join(args).strip()
+        self._trace_tool("remember", {"note": note})
+        path = memory.write(note)
+        return self._with_result_trace("remember", f"已写入跨会话项目记忆: {path}\n- {note}")
 
     def _evolve(self, args: list[str]) -> str:
         text = " ".join(args).strip()

@@ -1,5 +1,23 @@
 # 消融实验报告
 
+## Demo Day 量化摘要
+
+`python -m eval.ablation` 在固定的 6 个任务轨迹上比较“完整 system policy（含规划和错误恢复约定）”与“移除 policy”两组，并统一计算四项指标。
+
+| 配置 | 样本数 | 成功率 | 平均步数 | 平均 token | JSON 合法率 |
+|---|---:|---:|---:|---:|---:|
+| 完整 system policy | 6 | 1.00 | 2.33 | 878 | 1.00 |
+| 移除 policy | 6 | 0.33 | 1.00 | 158 | 0.50 |
+
+完整策略组会先规划、调用工具并在路径失败后换路，因此 token 和步骤更多，但任务成功率与工具调用 JSON 合法率明显提高。移除策略后虽然更省 token，但更多任务直接猜测、输出不完整或在第一次失败后停止。
+
+```bash
+python -m eval.ablation
+cat eval/ablation_results.json
+```
+
+限制：这组数据来自**确定性构造轨迹回放**，用于验证指标计算、轨迹格式和消融分析流程，不代表 DeepSeek 的真实成功率，更不代表投资预测准确率。真实模型抗注入评测使用 `FINANCE_RUN_LIVE_EVAL=1 python -m pytest tests/test_live_injection_eval.py -q` 单独运行，并明确消耗 API 额度。
+
 ## 目标
 
 证明以下设计不是装饰，而是提高 Demo Day 随机任务成功率和鲁棒性的关键：

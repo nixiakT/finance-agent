@@ -186,7 +186,10 @@ def render_trace_summary(
     tools: list[str],
     *,
     elapsed: float | None = None,
+    usage: dict | None = None,
 ) -> str:
+    from agent.usage import format_usage
+
     elapsed_part = f" · {_format_elapsed(elapsed)}" if elapsed is not None else ""
     tool_count = len(tools)
     tool_label = "tool" if tool_count == 1 else "tools"
@@ -196,7 +199,8 @@ def render_trace_summary(
     if tool_part:
         tool_part = f" · {tool_part}"
     expand = " · /trace"
-    return f"{_color('thinking', 'muted')} · completed{elapsed_part} · {steps} steps · {tool_count} {tool_label}{tool_part}{expand}"
+    usage_part = f" · {format_usage(usage)}" if usage else ""
+    return f"{_color('thinking', 'muted')} · completed{elapsed_part} · {steps} steps · {tool_count} {tool_label}{tool_part}{usage_part}{expand}"
 
 
 def render_thinking_status(

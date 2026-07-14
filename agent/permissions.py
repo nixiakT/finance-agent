@@ -8,6 +8,8 @@ from typing import Any
 
 READONLY = {"read", "grep", "glob", "read_skill", "task_list", "web_search"}
 WRITE = {"write", "edit", "trace2skill_generate"}
+FIXED_SAFE_WRITES = {"remember", "memory_set", "memory_forget"}
+SAFE_MCP_TOOLS = {"mcp__finance__risk_budget"}
 EXEC = {"bash", "web_fetch"}
 AUTO_FINANCE_PREFIXES = (
     "finance_",
@@ -21,6 +23,10 @@ def check(tool: str, args: dict[str, Any], workdir: Path) -> str:
     """Return ``allow``, ``confirm`` or ``deny`` for one tool call."""
     if tool == "wechat_send":
         return "allow" if _wechat_delivery_is_local() else "confirm"
+    if tool in FIXED_SAFE_WRITES:
+        return "allow"
+    if tool in SAFE_MCP_TOOLS:
+        return "allow"
     if tool in READONLY or tool.startswith(AUTO_FINANCE_PREFIXES):
         return "allow"
     if tool in WRITE:

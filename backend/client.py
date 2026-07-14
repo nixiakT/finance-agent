@@ -23,6 +23,7 @@ import httpx
 
 from config import load_local_env
 from finance.http import client as http_client
+from agent.usage import normalize_usage
 
 
 class DeepSeekBackend:
@@ -74,8 +75,11 @@ class DeepSeekBackend:
             json=payload,
         )
         resp.raise_for_status()
-        msg = resp.json()["choices"][0]["message"]
-        return self._normalize(msg)
+        data = resp.json()
+        msg = data["choices"][0]["message"]
+        normalized = self._normalize(msg)
+        normalized["usage"] = normalize_usage(data.get("usage"))
+        return normalized
 
     def _responses_chat(
         self,

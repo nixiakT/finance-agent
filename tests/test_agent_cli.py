@@ -512,6 +512,13 @@ def test_trace_commands_toggle_full_and_folded_modes() -> None:
     assert "trace off" in folded.output
 
 
+def test_complex_task_planning_policy_is_in_system_prompt() -> None:
+    from agent.prompts import SYSTEM_PROMPT
+
+    assert "第一步必须调用 task_list" in SYSTEM_PROMPT
+    assert "失败时记录原因并增加替代路线" in SYSTEM_PROMPT
+
+
 def test_main_handles_single_shot_slash_command(capsys: Any) -> None:
     assert main(["/tools"]) == 0
 

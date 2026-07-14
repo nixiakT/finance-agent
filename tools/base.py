@@ -114,6 +114,7 @@ def build_default_registry() -> ToolRegistry:
     from .finance_tools import finance_tools
     from .fs import read_tool, write_tool
     from .more_tools import edit_tool, glob_tool, grep_tool, task_list_tool
+    from .memory_tools import memory_tools
     from .scheduler_tools import scheduler_tools
     from .shell import bash_tool
     from .skill_tools import read_skill_tool
@@ -129,6 +130,7 @@ def build_default_registry() -> ToolRegistry:
         grep_tool,
         glob_tool,
         task_list_tool,
+        *memory_tools,
         read_skill_tool,
         *finance_tools,
         *evolution_tools,

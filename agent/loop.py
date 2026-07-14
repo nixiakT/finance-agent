@@ -111,6 +111,7 @@ class AgentLoop:
                 "turn": turn + 1,
                 "tool_calls": [call.get("name", "") for call in assistant.get("tool_calls") or []],
                 "content_preview": _preview(assistant.get("content", "")),
+                "usage": assistant.get("usage") or {},
             })
             messages.append({"role": "assistant",
                              "content": assistant.get("content", ""),

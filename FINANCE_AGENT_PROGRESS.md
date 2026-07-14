@@ -49,6 +49,14 @@
 
 ## 进度记录
 
+### 2026-07-14
+
+- [x] 增加通用跨会话项目记忆：`MEMORY.md`、KV 更新/遗忘和 remember 工具。
+- [x] 加强长任务规划策略：复杂任务先建 `task_list`，失败后记录原因并调整路线。
+- [x] 保留 DeepSeek API usage，trace 展示单轮/总 token，并支持显式单价成本估算。
+- [x] 增加领域 MCP server：`mcp__finance__risk_budget` 做确定性风险预算计算。
+- [x] 增加统一消融指标：成功率、平均步数、平均 token、JSON 合法率，并落盘结果 JSON。
+
 ### 2026-07-06
 
 - [x] 初始化 GitHub 仓库并推送首次提交。
