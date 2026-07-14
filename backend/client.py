@@ -33,7 +33,8 @@ class DeepSeekBackend:
                  api_key: str | None = None,
                  base_url: str | None = None,
                  model: str | None = None,
-                 timeout: float | None = None):
+                 timeout: float | None = None,
+                 read_retries: int | None = None):
         load_local_env()
         self.api_key = api_key or os.environ.get("DEEPSEEK_API_KEY", "")
         self.base_url = _normalize_base_url(base_url or os.environ.get("DEEPSEEK_BASE_URL", "https://api.deepseek.com"))
@@ -45,7 +46,12 @@ class DeepSeekBackend:
         if not self.api_key:
             raise RuntimeError("缺少 DEEPSEEK_API_KEY 环境变量")
         self.timeout = timeout or _positive_float_env("FINANCE_MODEL_TIMEOUT_SECONDS", 240.0)
-        self.read_retries = max(_nonnegative_int_env("FINANCE_MODEL_READ_RETRIES", 1), 0)
+        configured_retries = (
+            _nonnegative_int_env("FINANCE_MODEL_READ_RETRIES", 1)
+            if read_retries is None
+            else read_retries
+        )
+        self.read_retries = max(configured_retries, 0)
         self._client = http_client(timeout=self.timeout, follow_redirects=True)
 
     def chat(self, messages: list[dict[str, Any]], tools: list[dict] | None = None,

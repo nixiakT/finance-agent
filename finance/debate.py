@@ -1,4 +1,4 @@
-"""Deterministic multi-agent debate for stock selection research."""
+"""Deterministic debate used when the model debate is unavailable."""
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -31,6 +31,33 @@ def debate_stock(snapshot: StockSnapshot) -> str:
         _risk(snapshot),
     ]
     return render_debate(snapshot, roles)
+
+
+def rule_based_decision(snapshot: StockSnapshot) -> dict[str, Any]:
+    """Return the deterministic fallback decision in the model judge shape."""
+    trend = snapshot.indicators.get("return_3m_pct")
+    if trend is None or abs(float(trend)) < 2:
+        direction, confidence = "neutral", 0.5
+    else:
+        direction = "up" if float(trend) > 0 else "down"
+        confidence = min(0.5 + abs(float(trend)) / 100, 0.85)
+    return {
+        "score": float(_judge_score(snapshot)),
+        "conclusion": _judge_summary(snapshot),
+        "core_disagreement": "规则模式未执行模型交叉质询；" + _core_disagreement([
+            _bull(snapshot),
+            _bear(snapshot),
+            _value(snapshot),
+            _macro(snapshot),
+            _anti_bias(snapshot),
+        ]),
+        "direction": direction,
+        "confidence": confidence,
+        "horizon_days": 30,
+        "supporting_evidence": [],
+        "invalid_or_unverified_claims": ["未执行独立模型分析和交叉反驳。"],
+        "next_checks": ["恢复模型服务后重新运行 /debate。"],
+    }
 
 
 def debate_stocks(snapshots: list[StockSnapshot]) -> str:

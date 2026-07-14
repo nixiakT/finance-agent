@@ -14,7 +14,7 @@ Command-line stock research assistant for quotes, fundamentals, news verificatio
 - Structured reports: price, trend, fundamentals, technicals, news, risks, and research conclusion.
 - Research quality gate: information richness, data gaps, reject/recheck signals, and next verification steps.
 - Investment frameworks: Buffett/Munger, Duan Yongping, Li Lu, and Dalio.
-- Multi-agent debate: Bull, Bear, Value, Buffett, Munger, Duan, Li Lu, Dalio, Anti-Bias, Macro, Risk, and Judge, with discipline label, mirror test, and testable prediction.
+- Multi-agent debate: five independent model roles (Bull, Bear, Value, Macro/Risk, and Anti-Bias), Bull/Bear cross-rebuttals, and an independent Judge. Every claim cites a shared evidence package, while code validates numbers and caps confidence. If the model is unavailable, the terminal explicitly switches to the original 11-role deterministic fallback.
 - Prediction scoring loop: record bullish/bearish/neutral calls, evaluate future outcomes, and review accuracy, confidence calibration, and high-confidence misses.
 - Historical learning forecast: run walk-forward learning on historical candles, generate direction/confidence, and persist the result as a Skill.
 - Paper investment account: give the agent 1,000,000 paper cash, score a stock pool, calculate shares and allocation, record daily NAV, and review weak holdings/replacement candidates.

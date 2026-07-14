@@ -6,7 +6,7 @@ import re
 
 from .backtest import backtest_moving_average_cross, format_backtest, parse_strategy
 from .data import ProviderChain, export_history_csv
-from .debate import debate_stocks
+from .debate_orchestrator import ModelDebateOrchestrator, render_debate_outcomes
 from .history_learning import learn_from_history, render_learning, save_learning, update_history_learning_skill
 from .indicators import calculate_indicators, format_indicators
 from .models import Financials, Quote, StockSnapshot, utc_now_iso
@@ -44,8 +44,9 @@ def _with_provider_request_deadline(method):  # noqa: ANN001, ANN201
 
 
 class FinanceResearchAgent:
-    def __init__(self, provider: ProviderChain | None = None):
+    def __init__(self, provider: ProviderChain | None = None, debate_backend=None):  # noqa: ANN001
         self.provider = provider or ProviderChain()
+        self.debate_backend = debate_backend
 
     @_with_provider_request_deadline
     def snapshot(self, symbol: str, period: str = "1y", news_limit: int = 5) -> StockSnapshot:
@@ -250,21 +251,30 @@ class FinanceResearchAgent:
     def debate_stocks(self, symbols: list[str] | str, period: str = "1y") -> str:
         symbol_list = _coerce_symbols(symbols)
         snapshots = [self.snapshot(symbol, period, 3) for symbol in symbol_list]
-        output = debate_stocks(snapshots)
+        outcomes = ModelDebateOrchestrator(backend=self.debate_backend).run(snapshots)
+        output = render_debate_outcomes(outcomes)
         recorded: list[str] = []
-        for snapshot in snapshots:
-            direction, confidence = _snapshot_prediction(snapshot)
+        for snapshot, outcome in zip(snapshots, outcomes):
+            judge = outcome.judge
+            thesis = (
+                f"{judge.conclusion} 核心分歧: {judge.core_disagreement} "
+                f"证据: {', '.join(judge.supporting_evidence) or '规则兜底，无模型证据引用'}"
+            )
             prediction = record_prediction(
                 symbol=snapshot.symbol,
-                direction=direction,
-                horizon_days=30,
-                confidence=confidence,
-                thesis="multi-agent debate judge prediction",
+                direction=judge.direction,
+                horizon_days=judge.horizon_days,
+                confidence=judge.confidence,
+                thesis=thesis,
                 baseline_price=snapshot.quote.price,
                 baseline_as_of=snapshot.quote.as_of,
                 source="debate",
             )
-            recorded.append(f"{prediction.symbol}:{prediction.id}")
+            mode = "model judge" if outcome.mode == "model" else "rule fallback"
+            recorded.append(
+                f"{prediction.symbol}:{prediction.id} "
+                f"({mode}, {prediction.direction}, {prediction.confidence:.0%})"
+            )
         return output + "\n\nPredictions recorded: " + ", ".join(recorded)
 
     def backtest_strategy(
