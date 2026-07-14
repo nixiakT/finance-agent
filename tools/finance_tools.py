@@ -182,7 +182,7 @@ finance_get_price_history_tool = Tool(
 
 finance_get_financials_tool = Tool(
     name="finance_get_financials",
-    description="获取股票基本面和估值摘要。",
+    description="获取股票基本面和财务来源摘要；估值字段缺失时需结合 finance_get_quote。",
     parameters={"type": "object", "properties": {"symbol": {"type": "string"}}, "required": ["symbol"]},
     run=_get_financials,
 )

@@ -12,6 +12,7 @@
 工具结果会被截断，长会话会按预算压缩，避免把上下文撑爆。
 """
 from __future__ import annotations
+import re
 from pathlib import Path
 from typing import Any, Callable, Iterable
 
@@ -85,6 +86,7 @@ class AgentLoop:
 
     def run_messages(self, messages: list[dict[str, Any]]) -> str:
         user_task = _latest_user_task(messages)
+        tool_receipts: list[dict[str, Any]] = []
         for turn in range(self.max_turns):
             compacted = maybe_compact(messages, self.context_budget)
             if compacted is not messages:
@@ -116,19 +118,38 @@ class AgentLoop:
 
             tool_calls = assistant.get("tool_calls") or []
             if not tool_calls:
-                answer = _enforce_trade_boundary(user_task, assistant.get("content", ""))
+                answer = _enforce_task_boundaries(
+                    user_task,
+                    assistant.get("content", ""),
+                    tool_receipts,
+                )
                 messages[-1]["content"] = answer
                 return answer
 
             for call in tool_calls:
                 name = call["name"]
                 arguments = call.get("arguments", {})
+                succeeded = False
+                receipt_output = ""
                 if name not in allowed_tool_names:
                     obs = f"错误：工具 {name} 未向当前模型公开"
                 elif name in PAPER_PORTFOLIO_MUTATIONS and _is_real_trade_request(user_task):
                     obs = (
                         "[交易边界] 拒绝：用户要求的是真实交易，且未明确指定模拟/纸面交易；"
                         "本轮未下单，也不会修改纸面持仓。"
+                    )
+                    self._emit("tool_error", {"name": name, "error": obs})
+                elif name == "wechat_send" and not _has_successful_tool(tool_receipts, "wechat_status"):
+                    obs = "[微信边界] 拒绝：发送前必须先成功调用 wechat_status 确认连接模式。"
+                    self._emit("tool_error", {"name": name, "error": obs})
+                elif (
+                    name == "wechat_send"
+                    and _is_real_trade_request(user_task)
+                    and not _is_safe_trade_refusal_notification(arguments)
+                ):
+                    obs = (
+                        "[交易边界] 拒绝：真实交易请求的通知只能说明已拒绝、"
+                        "未下单且未成交，不得伪造买入或成交结果。"
                     )
                     self._emit("tool_error", {"name": name, "error": obs})
                 else:
@@ -149,9 +170,11 @@ class AgentLoop:
                                     "name": name,
                                     "arguments": arguments,
                                 })
+                                receipt_output = str(tool.run(**arguments))
+                                succeeded = _tool_result_succeeded(name, receipt_output)
                                 obs = _prepare_tool_observation(
                                     name,
-                                    str(tool.run(**arguments)),
+                                    receipt_output,
                                     self.max_observation_chars,
                                 )
                                 self._emit("tool_end", {
@@ -164,6 +187,12 @@ class AgentLoop:
                                     "name": name,
                                     "error": str(exc),
                                 })
+                tool_receipts.append({
+                    "name": name,
+                    "arguments": arguments,
+                    "success": succeeded,
+                    "output": receipt_output or obs,
+                })
                 messages.append({"role": "tool", "name": name,
                                  "tool_call_id": call.get("id"), "content": obs})
 
@@ -281,6 +310,16 @@ def _is_real_trade_request(task: str) -> bool:
     simulation = ("模拟", "纸面", "虚拟", "paper", "dry-run", "dryrun", "回测")
     if any(token in compact for token in simulation):
         return False
+    non_execution = (
+        "解释为什么不能", "说明为什么不能", "讨论是否可以", "假设", "假如",
+        "不要帮我买", "不用帮我买", "别帮我买", "不要替我买", "不要下单",
+        "donotbuy", "don'tbuy", "explainwhyyoucannotbuy", "hypothetically",
+    )
+    execution_override = ("但还是", "但仍然", "但照样", "然后还是", "stillbuy", "buyanyway")
+    if any(token in compact for token in non_execution) and not any(
+        token in compact for token in execution_override
+    ):
+        return False
     actions = (
         "帮我买", "替我买", "给我买", "帮我卖", "替我卖", "给我卖",
         "下单", "买入", "卖出", "成交", "placeorder", "buyshares", "sellshares",
@@ -296,6 +335,111 @@ def _enforce_trade_boundary(user_task: str, answer: str) -> str:
         "如下文提到持仓，它只能是任务前已存在的纸面模拟记录。"
     )
     return notice if not str(answer).strip() else notice + "\n\n" + str(answer).strip()
+
+
+def _enforce_task_boundaries(
+    user_task: str,
+    answer: str,
+    tool_receipts: list[dict[str, Any]],
+) -> str:
+    bounded = _enforce_trade_boundary(user_task, answer)
+    notices: list[str] = []
+    if _is_wechat_notification_request(user_task) and not _has_successful_tool(
+        tool_receipts,
+        "wechat_send",
+    ):
+        notice = (
+            "微信通知边界：本轮没有成功的 wechat_send 回执，"
+            "因此未发送，也未写入 dry-run outbox。"
+        )
+        failure = _latest_tool_failure(tool_receipts, "wechat_send")
+        if failure:
+            notice += f" 原因：{failure}"
+        notices.append(notice)
+
+    requested_predictions = _requested_prediction_symbols(user_task)
+    if requested_predictions:
+        recorded = _recorded_prediction_keys(tool_receipts)
+        missing = [
+            symbol
+            for symbol, key in requested_predictions
+            if key not in recorded
+        ]
+        if missing:
+            notices.append(
+                f"预测记录边界：本轮仍有 {len(missing)} 个标的没有成功的 "
+                f"prediction_record 回执（{', '.join(missing)}），不能算作已写入评分表。"
+            )
+    if not notices:
+        return bounded
+    return bounded.rstrip() + "\n\n" + "\n".join(notices)
+
+
+def _has_successful_tool(tool_receipts: list[dict[str, Any]], name: str) -> bool:
+    return any(
+        receipt.get("name") == name and receipt.get("success") is True
+        for receipt in tool_receipts
+    )
+
+
+def _latest_tool_failure(tool_receipts: list[dict[str, Any]], name: str) -> str:
+    for receipt in reversed(tool_receipts):
+        if receipt.get("name") == name and receipt.get("success") is not True:
+            return _preview(redact_sensitive_text(str(receipt.get("output") or "")))
+    return ""
+
+
+def _tool_result_succeeded(name: str, output: str) -> bool:
+    if name == "wechat_send":
+        return bool(re.search(r"(?im)^- status: (?:queued|sent)\s*$", output))
+    if name == "prediction_record":
+        return "Prediction recorded:" in output and "- id:" in output
+    return True
+
+
+def _is_safe_trade_refusal_notification(arguments: dict[str, Any]) -> bool:
+    compact = "".join(str(arguments.get("content") or "").lower().split())
+    refusal = ("已拒绝", "拒绝", "不能执行", "refused", "cannotexecute")
+    no_execution = ("未下单", "没有下单", "未成交", "没有成交", "noorder", "notrade", "notplaced")
+    fabricated = ("已买入", "买入成功", "已成交", "成交成功", "orderplaced", "bought")
+    return (
+        any(token in compact for token in refusal)
+        and any(token in compact for token in no_execution)
+        and not any(token in compact for token in fabricated)
+    )
+
+
+def _is_wechat_notification_request(task: str) -> bool:
+    compact = "".join(str(task).lower().split())
+    channel = any(token in compact for token in ("微信", "企业微信", "wechat", "wecom"))
+    action = any(token in compact for token in ("发", "通知", "推送", "提醒", "send", "notify"))
+    return channel and action
+
+
+def _requested_prediction_symbols(task: str) -> list[tuple[str, str]]:
+    compact = "".join(str(task).lower().split())
+    record_cues = ("记录", "记到", "写入", "保存", "评分表", "record", "scorecard")
+    prediction_cues = ("预测", "涨跌", "方向", "看涨", "看跌", "把握", "置信", "prediction")
+    if not any(token in compact for token in record_cues) or not any(
+        token in compact for token in prediction_cues
+    ):
+        return []
+    from finance.symbols import extract_symbols, to_yahoo_symbol
+
+    return [(symbol, to_yahoo_symbol(symbol)) for symbol in extract_symbols(task)]
+
+
+def _recorded_prediction_keys(tool_receipts: list[dict[str, Any]]) -> set[str]:
+    from finance.symbols import normalize_symbol, to_yahoo_symbol
+
+    keys: set[str] = set()
+    for receipt in tool_receipts:
+        if receipt.get("name") != "prediction_record" or receipt.get("success") is not True:
+            continue
+        symbol = str(receipt.get("arguments", {}).get("symbol") or "").strip()
+        if symbol:
+            keys.add(to_yahoo_symbol(normalize_symbol(symbol)))
+    return keys
 
 
 def _prepare_tool_observation(name: str, text: str, max_chars: int) -> str:

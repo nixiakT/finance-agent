@@ -135,6 +135,7 @@ def test_prompt_refuses_real_orders_and_requires_side_effect_evidence() -> None:
     assert "被权限层拦截或工具失败时" in SYSTEM_PROMPT
     assert "通知内容只能说" in SYSTEM_PROMPT
     assert "真实下单已拒绝" in SYSTEM_PROMPT
+    assert "不得声称“到期后自动评分”" in SYSTEM_PROMPT
 
 
 def test_permission_policy_layers_workspace_writes(tmp_path) -> None:  # noqa: ANN001
@@ -174,6 +175,150 @@ def test_real_order_request_gets_deterministic_no_trade_notice() -> None:
 
     assert answer.startswith("交易边界：我不能执行真实证券下单")
     assert "未产生真实成交" in answer
+
+
+def test_trade_refusal_wechat_notice_requires_status_and_safe_content(monkeypatch, tmp_path) -> None:  # noqa: ANN001
+    calls: list[str] = []
+    registry = ToolRegistry()
+    registry.register(Tool(
+        name="wechat_status",
+        description="test status",
+        parameters={"type": "object", "properties": {}},
+        run=lambda: calls.append("status") or "WeChat connector status:\n- mode: dry-run",
+    ))
+    registry.register(Tool(
+        name="wechat_send",
+        description="test send",
+        parameters={"type": "object", "properties": {"content": {"type": "string"}}},
+        run=lambda content: calls.append(content) or (
+            "WeChat delivery:\n- mode: dry-run\n- destination: outbox\n- status: queued"
+        ),
+    ))
+    backend = MultiToolThenAnswerBackend([
+        {"name": "wechat_status", "arguments": {}},
+        {
+            "name": "wechat_send",
+            "arguments": {"content": "真实下单已拒绝，未下单、未成交"},
+        },
+    ])
+    monkeypatch.setenv("FINANCE_WECHAT_MODE", "dry-run")
+    loop = AgentLoop(backend, registry, SYSTEM_PROMPT, workdir=tmp_path)
+
+    answer = loop.run("帮我买100股茅台，再发微信通知我")
+
+    assert calls == ["status", "真实下单已拒绝，未下单、未成交"]
+    assert answer.startswith("交易边界：我不能执行真实证券下单")
+    assert "没有成功的 wechat_send" not in answer
+
+
+def test_trade_notification_blocks_send_without_status(monkeypatch, tmp_path) -> None:  # noqa: ANN001
+    calls: list[str] = []
+    registry = ToolRegistry()
+    registry.register(Tool(
+        name="wechat_send",
+        description="test send",
+        parameters={"type": "object", "properties": {"content": {"type": "string"}}},
+        run=lambda content: calls.append(content) or "- status: queued",
+    ))
+    monkeypatch.setenv("FINANCE_WECHAT_MODE", "dry-run")
+    loop = AgentLoop(
+        ToolCallBackend("wechat_send", {"content": "真实下单已拒绝，未下单、未成交"}),
+        registry,
+        SYSTEM_PROMPT,
+        workdir=tmp_path,
+    )
+
+    answer = loop.run("帮我买 AAPL 并微信通知")
+
+    assert calls == []
+    assert "发送前必须先成功调用 wechat_status" in answer
+    assert "没有成功的 wechat_send" in answer
+
+
+def test_trade_notification_blocks_fabricated_fill_after_status(monkeypatch, tmp_path) -> None:  # noqa: ANN001
+    calls: list[str] = []
+    registry = ToolRegistry()
+    registry.register(Tool(
+        name="wechat_status",
+        description="test status",
+        parameters={"type": "object", "properties": {}},
+        run=lambda: "WeChat connector status:\n- mode: dry-run",
+    ))
+    registry.register(Tool(
+        name="wechat_send",
+        description="test send",
+        parameters={"type": "object", "properties": {"content": {"type": "string"}}},
+        run=lambda content: calls.append(content) or "- status: queued",
+    ))
+    monkeypatch.setenv("FINANCE_WECHAT_MODE", "dry-run")
+    loop = AgentLoop(
+        MultiToolThenAnswerBackend([
+            {"name": "wechat_status", "arguments": {}},
+            {"name": "wechat_send", "arguments": {"content": "已买入 AAPL 100 股，成交成功"}},
+        ]),
+        registry,
+        SYSTEM_PROMPT,
+        workdir=tmp_path,
+    )
+
+    answer = loop.run("帮我买 AAPL 并微信通知")
+
+    assert calls == []
+    assert "不得伪造买入或成交结果" in answer
+    assert "没有成功的 wechat_send" in answer
+
+
+def test_explanation_about_trade_is_not_treated_as_execution_request() -> None:
+    loop = AgentLoop(
+        CapturingBackend(summary="unused", answer="这是安全边界说明。"),
+        ToolRegistry(),
+        SYSTEM_PROMPT,
+    )
+
+    answer = loop.run("解释为什么不能帮我买茅台")
+
+    assert answer == "这是安全边界说明。"
+
+
+def test_prediction_scorecard_reports_missing_tool_receipts() -> None:
+    registry = ToolRegistry()
+    registry.register(Tool(
+        name="prediction_record",
+        description="test prediction record",
+        parameters={"type": "object", "properties": {}},
+        run=lambda **kwargs: "Prediction recorded:\n- id: pred-1\n- symbol: AAPL",
+    ))
+    backend = MultiToolThenAnswerBackend([
+        {
+            "name": "prediction_record",
+            "arguments": {"symbol": "AAPL", "direction": "up"},
+        },
+    ])
+    loop = AgentLoop(backend, registry, SYSTEM_PROMPT)
+
+    answer = loop.run("预测 AAPL MSFT 的涨跌方向并记录到评分表")
+
+    assert "MSFT" in answer
+    assert "不能算作已写入评分表" in answer
+
+
+def test_prediction_scorecard_accepts_one_receipt_per_requested_symbol() -> None:
+    registry = ToolRegistry()
+    registry.register(Tool(
+        name="prediction_record",
+        description="test prediction record",
+        parameters={"type": "object", "properties": {}},
+        run=lambda symbol, **kwargs: f"Prediction recorded:\n- id: pred-{symbol}\n- symbol: {symbol}",
+    ))
+    backend = MultiToolThenAnswerBackend([
+        {"name": "prediction_record", "arguments": {"symbol": "AAPL", "direction": "up"}},
+        {"name": "prediction_record", "arguments": {"symbol": "MSFT", "direction": "down"}},
+    ])
+    loop = AgentLoop(backend, registry, SYSTEM_PROMPT)
+
+    answer = loop.run("预测 AAPL MSFT 的涨跌方向并记录到评分表")
+
+    assert answer == "done"
 
 
 def test_explicit_paper_trade_does_not_get_real_order_notice() -> None:
@@ -380,6 +525,19 @@ class ToolCallBackend:
         if messages[-1].get("role") == "tool":
             return {"role": "assistant", "content": messages[-1]["content"], "tool_calls": []}
         return {"role": "assistant", "content": "", "tool_calls": [{"name": self.name, "arguments": self.arguments}]}
+
+
+class MultiToolThenAnswerBackend:
+    def __init__(self, tool_calls: list[dict[str, Any]], answer: str = "done") -> None:
+        self.tool_calls = tool_calls
+        self.answer = answer
+        self.called = False
+
+    def chat(self, messages, tools=None):  # noqa: ANN001, ANN201
+        if not self.called:
+            self.called = True
+            return {"role": "assistant", "content": "", "tool_calls": self.tool_calls}
+        return {"role": "assistant", "content": self.answer, "tool_calls": []}
 
 
 class ToolEchoBackend:

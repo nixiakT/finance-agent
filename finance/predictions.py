@@ -3,14 +3,20 @@ from __future__ import annotations
 
 import json
 import math
+import os
+import shutil
 import uuid
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
+from config import load_local_env
 
-PREDICTION_PATH = Path(".finance_agent") / "predictions.jsonl"
+
+LEGACY_PREDICTION_PATH = Path.cwd() / ".finance_agent" / "predictions.jsonl"
+DEFAULT_PREDICTION_PATH = Path.home() / ".finance-agent" / "predictions.jsonl"
+PREDICTION_PATH = DEFAULT_PREDICTION_PATH
 
 
 @dataclass
@@ -46,7 +52,7 @@ def record_prediction(
     source: str = "",
     path: Path | None = None,
 ) -> PredictionRecord:
-    path = path or PREDICTION_PATH
+    path = _prediction_path(path)
     now = datetime.now(UTC).replace(microsecond=0)
     horizon = max(int(horizon_days), 1)
     record = PredictionRecord(
@@ -67,7 +73,7 @@ def record_prediction(
 
 
 def load_predictions(path: Path | None = None) -> list[PredictionRecord]:
-    path = path or PREDICTION_PATH
+    path = _prediction_path(path)
     if not path.exists():
         return []
     rows: list[PredictionRecord] = []
@@ -83,7 +89,7 @@ def load_predictions(path: Path | None = None) -> list[PredictionRecord]:
 
 
 def save_predictions(records: list[PredictionRecord], path: Path | None = None) -> None:
-    path = path or PREDICTION_PATH
+    path = _prediction_path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     text = "\n".join(json.dumps(record.__dict__, ensure_ascii=False, separators=(",", ":")) for record in records)
     path.write_text(text + ("\n" if text else ""), encoding="utf-8")
@@ -112,12 +118,15 @@ def evaluate_prediction(
 
 def evaluate_due_predictions(
     *,
-    get_price: Any,
+    get_price: Any | None = None,
+    get_historical_price: Any | None = None,
     now: datetime | None = None,
     path: Path | None = None,
     include_not_due: bool = False,
 ) -> tuple[list[PredictionRecord], dict[str, Any]]:
-    path = path or PREDICTION_PATH
+    if get_price is None and get_historical_price is None:
+        raise ValueError("evaluation requires a historical or latest-price callback")
+    path = _prediction_path(path)
     current = now or datetime.now(UTC).replace(microsecond=0)
     records = load_predictions(path)
     changed = False
@@ -132,7 +141,12 @@ def evaluate_due_predictions(
         if not include_not_due and due_at > current:
             continue
         try:
-            price, as_of = get_price(record.symbol)
+            if include_not_due and due_at > current and get_price is not None:
+                price, as_of = get_price(record.symbol)
+            elif get_historical_price is not None:
+                price, as_of = get_historical_price(record.symbol, record.due_at)
+            else:
+                price, as_of = get_price(record.symbol)
             evaluate_prediction(record, evaluation_price=price, evaluated_at=as_of or _iso(current))
         except Exception as exc:  # noqa: BLE001 - one bad quote must not abort the ledger
             record.notes = f"evaluation failed: {exc}"
@@ -144,6 +158,45 @@ def evaluate_due_predictions(
     if changed:
         save_predictions(records, path)
     return evaluated, scorecard(records)
+
+
+def evaluation_history_period(due_at: str, now: datetime | None = None) -> str:
+    """Choose a history window that still contains a delayed prediction due date."""
+    due = _parse_iso(due_at)
+    current = now or datetime.now(UTC)
+    age_days = max((current - due).days, 0)
+    if age_days <= 60:
+        return "3mo"
+    if age_days <= 150:
+        return "6mo"
+    if age_days <= 330:
+        return "1y"
+    if age_days <= 690:
+        return "2y"
+    if age_days <= 1750:
+        return "5y"
+    return "max"
+
+
+def select_due_close(history: list[Any], due_at: str) -> tuple[float, str]:
+    """Return the first available market close on or after the due date."""
+    due_date = _parse_iso(due_at).date()
+    candidates: list[tuple[str, float]] = []
+    for candle in history:
+        close = getattr(candle, "close", None)
+        raw_date = str(getattr(candle, "date", ""))
+        if close is None or not raw_date:
+            continue
+        try:
+            market_date = datetime.fromisoformat(raw_date[:10]).date()
+        except ValueError:
+            continue
+        if market_date >= due_date:
+            candidates.append((market_date.isoformat(), float(close)))
+    if not candidates:
+        raise ValueError(f"no market close available on or after prediction due date {due_date.isoformat()}")
+    as_of, close = min(candidates, key=lambda item: item[0])
+    return close, as_of
 
 
 def scorecard(records: list[PredictionRecord]) -> dict[str, Any]:
@@ -257,6 +310,27 @@ def prediction_score(direction: str, return_pct: float, confidence: float) -> fl
     confidence = _normalize_confidence(confidence)
     signed = 1.0 if hit else -1.0
     return signed * (0.4 + 0.6 * edge) * confidence
+
+
+def _prediction_path(path: Path | None) -> Path:
+    if path is not None:
+        return Path(path).expanduser()
+    uses_default_location = PREDICTION_PATH == DEFAULT_PREDICTION_PATH
+    if not uses_default_location:
+        target = Path(PREDICTION_PATH).expanduser()
+    else:
+        load_local_env()
+        configured = os.environ.get("FINANCE_PREDICTION_PATH", "").strip()
+        target = Path(configured).expanduser() if configured else DEFAULT_PREDICTION_PATH
+        try:
+            target.parent.mkdir(parents=True, exist_ok=True)
+        except OSError:
+            if configured:
+                raise
+            return LEGACY_PREDICTION_PATH
+    if uses_default_location and not target.exists() and LEGACY_PREDICTION_PATH.exists():
+        shutil.copy2(LEGACY_PREDICTION_PATH, target)
+    return target
 
 
 def _append(record: PredictionRecord, path: Path) -> None:

@@ -46,6 +46,8 @@
 
 自然语言金融问题与普通任务一样进入 `AgentLoop`，由模型自主组合具体金融和网页工具。真模型的 schema 与执行门禁都会排除 `finance_route_task` / `finance_generate_report`；只有首轮 `backend.chat()` 在工具执行前失败时，CLI 才直接调用确定性路由兜底。`ModelCallError.turn > 1` 时禁止自动重跑，避免重复写组合、预测或 Skill。交互模式的兜底结果通过 `AgentSession.record_finance_turn()` 以低信任历史记入同一会话。
 
+自然语言入口不根据测评题、固定股票或关键词在模型前切换路径。`AgentLoop` 会记录本轮工具回执：真实交易始终被执行层拒绝，`wechat_send` 必须在成功的 `wechat_status` 之后执行，而且只有返回 `queued` / `sent` 才能声称已发送；多标的预测记录也必须每个标的都有成功的 `prediction_record` id。
+
 ### CLI 与动态命令
 
 `agent/command_catalog.py` 是内置 slash command 的单一信息源：帮助页和补全菜单都由同一组 `CommandSpec` 生成，不再分别维护。`prompt_toolkit` 使用带类型和描述的模糊补全；`DynamicSlashCommands` 启动时完成首次发现，并在打开补全或执行动态命令前 `refresh()`，因此会话中新增的命令、Skill 和 MCP prompt 无需重启即可出现。合并内容包括：

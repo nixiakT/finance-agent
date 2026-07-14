@@ -3,12 +3,14 @@ from __future__ import annotations
 
 from finance.evolution import add_memory, extract_learning, render_memories
 from finance.predictions import (
+    evaluation_history_period,
     evaluate_due_predictions,
     load_predictions,
     record_prediction,
     render_learning_report,
     render_predictions,
     render_scorecard,
+    select_due_close,
 )
 from trace2skill import generate_skill
 from .base import Tool
@@ -107,11 +109,20 @@ def _prediction_evaluate(include_not_due: bool = False) -> str:
 
     agent = FinanceResearchAgent()
 
-    def get_price(symbol: str) -> tuple[float | None, str]:
+    def get_historical_price(symbol: str, due_at: str) -> tuple[float, str]:
+        period = evaluation_history_period(due_at)
+        history = agent.provider.get_history(symbol, period, "1d")
+        return select_due_close(history, due_at)
+
+    def get_latest_price(symbol: str) -> tuple[float | None, str]:
         quote = agent.provider.get_quote(symbol)
         return quote.price, quote.as_of
 
-    evaluated, card = evaluate_due_predictions(get_price=get_price, include_not_due=include_not_due)
+    evaluated, card = evaluate_due_predictions(
+        get_price=get_latest_price,
+        get_historical_price=get_historical_price,
+        include_not_due=include_not_due,
+    )
     lines = [f"Evaluated predictions: {len(evaluated)}"]
     if evaluated:
         lines.append(render_predictions(evaluated, len(evaluated)))

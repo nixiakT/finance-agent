@@ -36,7 +36,7 @@ def render_stock_report(snapshot: StockSnapshot) -> str:
         format_indicators(snapshot.indicators),
         "",
         "## 基本面",
-        _format_financials(financials),
+        render_financials(financials),
         "",
         "## 新闻事件",
         _format_news(snapshot.news),
@@ -118,7 +118,7 @@ def _format_quote(quote: Quote) -> str:
     ])
 
 
-def _format_financials(financials: Financials) -> str:
+def render_financials(financials: Financials) -> str:
     fields = [
         ("市值", financials.market_cap, "big"),
         ("PE", financials.pe_ratio, "number"),

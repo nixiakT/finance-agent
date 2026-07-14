@@ -45,9 +45,9 @@ class DeepSeekBackend:
             raise ValueError("DEEPSEEK_API_MODE must be chat_completions or responses")
         if not self.api_key:
             raise RuntimeError("缺少 DEEPSEEK_API_KEY 环境变量")
-        self.timeout = timeout or _positive_float_env("FINANCE_MODEL_TIMEOUT_SECONDS", 240.0)
+        self.timeout = timeout or _positive_float_env("FINANCE_MODEL_TIMEOUT_SECONDS", 120.0)
         configured_retries = (
-            _nonnegative_int_env("FINANCE_MODEL_READ_RETRIES", 1)
+            _nonnegative_int_env("FINANCE_MODEL_READ_RETRIES", 0)
             if read_retries is None
             else read_retries
         )

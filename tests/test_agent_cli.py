@@ -5,7 +5,7 @@ from typing import Any
 
 import pytest
 
-from agent.cli import TracePrinter, _is_g06_fast_path, _should_route_finance, main
+from agent.cli import TracePrinter, _should_route_finance, main
 from agent.commands import CommandRouter
 from agent.context import maybe_compact, truncate_observation
 from agent.loop import AgentLoop, AgentSession, ModelCallError, _tool_preview
@@ -749,32 +749,36 @@ def test_finance_fallback_detector_is_conservative() -> None:
 
 @pytest.mark.parametrize("task", [
     "研究一下 贵州茅台(600519) 出份报告",
+    "帮我调研贵州茅台，整理成投资备忘录",
     "研究一下 腾讯(00700.HK) 和 苹果(AAPL)",
+    "对比腾讯和苹果的投资价值",
     "对 600519 000858 00700.HK AAPL NVDA 各给个涨跌方向和把握，记到评分表",
+    "预测 MSFT AMD TSLA GOOGL AVGO 的方向和置信度并保存记录",
     "帮我买100股茅台，再发微信通知我",
+    "替我真实下单 AAPL，然后用 WeChat 告诉我结果",
 ])
-def test_g06_evaluator_workflows_use_deterministic_fast_path(task: str) -> None:
-    assert _is_g06_fast_path(task)
-
-
-def test_g06_fast_path_does_not_capture_general_finance_queries() -> None:
-    assert not _is_g06_fast_path("分析 AAPL 最近一年走势")
-    assert not _is_g06_fast_path("比较 MSFT 和 NVDA")
-
-
-def test_g06_single_shot_fast_path_bypasses_model(capsys: Any, monkeypatch: pytest.MonkeyPatch) -> None:
-    import agent.cli as cli_module
+def test_evaluator_workflows_reach_agent_loop(
+    task: str,
+    capsys: Any,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     from finance.agent import FinanceResearchAgent
 
-    monkeypatch.setattr(
-        cli_module,
-        "build_agent",
-        lambda *args, **kwargs: pytest.fail("g06 fast path must not build the model agent"),
-    )
-    monkeypatch.setattr(FinanceResearchAgent, "route_task", lambda self, task: "deterministic g06 result")
+    backend = RecordingBackend("model handled evaluator workflow")
 
-    assert main(["研究一下", "腾讯(00700.HK)", "和", "苹果(AAPL)"]) == 0
-    assert "deterministic g06 result" in capsys.readouterr().out
+    def build(observer=None, registry=None):  # noqa: ANN001, ANN202
+        return AgentLoop(backend, registry or ToolRegistry(), "system", observer=observer)
+
+    monkeypatch.setattr("agent.cli.build_agent", build)
+    monkeypatch.setattr(
+        FinanceResearchAgent,
+        "route_task",
+        lambda *args: pytest.fail("natural-language evaluator workflow bypassed AgentLoop"),
+    )
+
+    assert main([task]) == 0
+    assert backend.user_tasks == [task]
+    assert "model handled evaluator workflow" in capsys.readouterr().out
 
 
 @pytest.mark.parametrize("task", [
@@ -988,6 +992,30 @@ def test_model_read_timeout_retries_before_returning(monkeypatch: pytest.MonkeyP
 
     assert calls == 2
     assert result["content"] == "done"
+
+
+def test_model_timeout_defaults_are_bounded_without_automatic_retry(monkeypatch: pytest.MonkeyPatch) -> None:
+    import backend.client as client_module
+
+    captured: dict[str, Any] = {}
+
+    class HTTPClient:
+        pass
+
+    monkeypatch.delenv("FINANCE_MODEL_TIMEOUT_SECONDS", raising=False)
+    monkeypatch.delenv("FINANCE_MODEL_READ_RETRIES", raising=False)
+    monkeypatch.setattr(client_module, "load_local_env", lambda: None)
+    monkeypatch.setattr(
+        client_module,
+        "http_client",
+        lambda **kwargs: captured.update(kwargs) or HTTPClient(),
+    )
+
+    backend = client_module.DeepSeekBackend(api_key="test-key")
+
+    assert backend.timeout == 120.0
+    assert backend.read_retries == 0
+    assert captured["timeout"] == 120.0
 
 
 def test_finance_memory_sanitizes_secrets(tmp_path: Any) -> None:

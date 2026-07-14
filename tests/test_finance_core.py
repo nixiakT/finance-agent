@@ -154,6 +154,35 @@ def test_route_task_selects_compare_and_backtest() -> None:
     assert "# 策略回测结果" in backtest
 
 
+def test_get_financials_does_not_repeat_quote_or_history_requests() -> None:
+    class FundamentalsOnlyProvider:
+        def __init__(self) -> None:
+            self.financial_calls: list[str] = []
+
+        def get_financials(self, symbol: str) -> Financials:
+            self.financial_calls.append(symbol)
+            return Financials(
+                symbol=symbol,
+                source="STATIC_FUNDAMENTALS",
+                as_of="2026-06-30",
+                revenue=100,
+                net_income=20,
+            )
+
+        def get_quote(self, symbol: str) -> Quote:
+            raise AssertionError("finance_get_financials must not fetch a quote")
+
+        def get_history(self, symbol: str, period: str, interval: str) -> list[Candle]:
+            raise AssertionError("finance_get_financials must not fetch price history")
+
+    provider = FundamentalsOnlyProvider()
+    output = FinanceResearchAgent(provider=provider).get_financials("AAPL")  # type: ignore[arg-type]
+
+    assert provider.financial_calls == ["AAPL"]
+    assert "STATIC_FUNDAMENTALS" in output
+    assert "2026-06-30" in output
+
+
 def test_route_task_portfolio_review_handles_direct_tickers_without_resolver_network(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:  # noqa: ANN001
     import finance.paper_portfolio as portfolio
     import finance.agent as finance_agent

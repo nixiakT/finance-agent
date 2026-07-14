@@ -25,7 +25,7 @@ from .paper_portfolio import (
 )
 from .predictions import record_prediction
 from .quality import render_quality_screen
-from .report import render_comparison, render_daily_brief, render_stock_report
+from .report import render_comparison, render_daily_brief, render_financials, render_stock_report
 from .resolver import resolve_symbol, resolve_symbol_text
 from .symbols import extract_symbols, normalize_symbol
 from .web import web_search
@@ -208,8 +208,16 @@ class FinanceResearchAgent:
         ])
 
     def get_financials(self, symbol: str) -> str:
-        snapshot = self.snapshot(symbol, "3mo", 0)
-        return render_stock_report(snapshot).split("## 新闻事件")[0].strip()
+        normalized = _resolve_symbol(symbol)
+        try:
+            financials = self.provider.get_financials(normalized)
+        except Exception as exc:
+            return f"{normalized}: 基本面获取失败: {_compact_error(exc)}"
+        return "\n".join([
+            f"# 基本面：{normalized}",
+            render_financials(financials),
+            *[f"备注: {note}" for note in financials.notes],
+        ])
 
     def get_news(self, symbol: str, limit: int = 5) -> str:
         normalized = _resolve_symbol(symbol)
