@@ -12,3 +12,21 @@ out-*/
 .env
 .env.*
 !.env.example
+
+# LaTeX / Beamer intermediate files (final PDF remains tracked)
+ppt/*.aux
+ppt/*.bbl
+ppt/*.bcf
+ppt/*.blg
+ppt/*.fdb_latexmk
+ppt/*.fls
+ppt/*.log
+ppt/*.nav
+ppt/*.out
+ppt/*.run.xml
+ppt/*.snm
+ppt/*.synctex.gz
+ppt/*.toc
+ppt/*.vrb
+ppt/*.xdv
+ppt/build/
