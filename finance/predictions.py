@@ -32,6 +32,14 @@ class PredictionRecord:
     created_at: str
     due_at: str
     source: str = ""
+    confidence_kind: str = "legacy_unspecified"
+    signal_strength: float | None = None
+    calibrated_probability: float | None = None
+    calibration_samples: int = 0
+    calibration_hits: int = 0
+    calibration_interval_low: float | None = None
+    calibration_interval_high: float | None = None
+    calibration_method: str = ""
     evaluated_at: str = ""
     evaluation_price: float | None = None
     return_pct: float | None = None
@@ -50,6 +58,14 @@ def record_prediction(
     baseline_price: float | None,
     baseline_as_of: str = "",
     source: str = "",
+    confidence_kind: str = "legacy_unspecified",
+    signal_strength: float | None = None,
+    calibrated_probability: float | None = None,
+    calibration_samples: int = 0,
+    calibration_hits: int = 0,
+    calibration_interval_low: float | None = None,
+    calibration_interval_high: float | None = None,
+    calibration_method: str = "",
     path: Path | None = None,
 ) -> PredictionRecord:
     path = _prediction_path(path)
@@ -67,6 +83,14 @@ def record_prediction(
         created_at=_iso(now),
         due_at=_iso(now + timedelta(days=horizon)),
         source=source,
+        confidence_kind=str(confidence_kind or "legacy_unspecified"),
+        signal_strength=_optional_confidence(signal_strength),
+        calibrated_probability=_optional_confidence(calibrated_probability),
+        calibration_samples=max(int(calibration_samples), 0),
+        calibration_hits=max(int(calibration_hits), 0),
+        calibration_interval_low=_optional_confidence(calibration_interval_low),
+        calibration_interval_high=_optional_confidence(calibration_interval_high),
+        calibration_method=str(calibration_method or ""),
     )
     _append(record, path)
     return record
@@ -232,9 +256,55 @@ def render_predictions(records: list[PredictionRecord], limit: int = 20) -> str:
         hit = "hit" if record.hit else ("miss" if record.hit is False else "pending")
         lines.append(
             f"- {record.id} {record.symbol} {record.direction} {record.horizon_days}d "
-            f"conf={record.confidence:.2f} base={_fmt(record.baseline_price)} due={record.due_at} "
+            f"{_confidence_summary(record)} base={_fmt(record.baseline_price)} due={record.due_at} "
             f"{status}/{hit} ret={_fmt(record.return_pct)} thesis={record.thesis[:90]}"
         )
+    return "\n".join(lines)
+
+
+def render_prediction_record(record: PredictionRecord) -> str:
+    confidence_kind = getattr(record, "confidence_kind", "legacy_unspecified")
+    signal_strength = getattr(record, "signal_strength", None)
+    calibrated_probability = getattr(record, "calibrated_probability", None)
+    calibration_samples = int(getattr(record, "calibration_samples", 0) or 0)
+    calibration_hits = int(getattr(record, "calibration_hits", 0) or 0)
+    lines = [
+        "Prediction recorded:",
+        f"- id: {record.id}",
+        f"- symbol: {record.symbol}",
+        f"- direction: {record.direction}",
+        f"- horizon_days: {record.horizon_days}",
+    ]
+    if confidence_kind == "historical_calibrated" and calibrated_probability is not None:
+        lines.append(f"- historical_calibrated_hit_rate: {calibrated_probability:.1%}")
+        interval = _interval(
+            getattr(record, "calibration_interval_low", None),
+            getattr(record, "calibration_interval_high", None),
+        )
+        lines.append(
+            f"- calibration: {calibration_hits}/{calibration_samples} historical hits"
+            f"{interval}; {getattr(record, 'calibration_method', '')}"
+        )
+        if signal_strength is not None:
+            lines.append(f"- raw_signal_strength: {signal_strength * 100:.0f}/100 (not a probability)")
+    else:
+        strength = signal_strength if signal_strength is not None else record.confidence
+        source = {
+            "heuristic_signal": "heuristic",
+            "user_supplied": "user supplied",
+            "model_supplied": "model supplied",
+            "legacy_unspecified": "legacy/unspecified",
+        }.get(confidence_kind, confidence_kind)
+        lines.append(f"- signal_strength: {strength * 100:.0f}/100 ({source}; not a statistical probability)")
+        if calibration_samples:
+            lines.append(
+                f"- calibration: insufficient non-overlapping samples "
+                f"(n={calibration_samples}, require n>=30)"
+            )
+    lines.extend([
+        f"- baseline: {record.baseline_price} ({record.baseline_as_of})",
+        f"- due_at: {record.due_at}",
+    ])
     return "\n".join(lines)
 
 
@@ -248,7 +318,7 @@ def render_learning_report(records: list[PredictionRecord]) -> str:
         ])
 
     evaluated = [record for record in records if record.hit is not None]
-    high_conf_misses = [
+    high_estimate_misses = [
         record for record in evaluated
         if record.hit is False and record.confidence >= 0.7
     ]
@@ -275,15 +345,15 @@ def render_learning_report(records: list[PredictionRecord]) -> str:
     if weakest:
         lines.append(f"- weakest direction bucket: {weakest}; review theses in that bucket before similar calls")
 
-    if high_conf_misses:
-        lines.append("- high-confidence misses to review:")
-        for record in high_conf_misses[:3]:
+    if high_estimate_misses:
+        lines.append("- high-estimate misses to review (check each estimate basis):")
+        for record in high_estimate_misses[:3]:
             lines.append(
                 f"  - {record.id} {record.symbol} {record.direction} "
-                f"conf={record.confidence:.2f} ret={_pct_value(record.return_pct)} thesis={record.thesis[:80]}"
+                f"{_confidence_summary(record)} ret={_pct_value(record.return_pct)} thesis={record.thesis[:80]}"
             )
     else:
-        lines.append("- no high-confidence misses in the evaluated sample")
+        lines.append("- no high-estimate misses in the evaluated sample")
 
     return "\n".join(lines)
 
@@ -298,7 +368,7 @@ def render_scorecard(card: dict[str, Any]) -> str:
         "Prediction scorecard:",
         f"- evaluated: {card['evaluated']}",
         f"- directional accuracy: {_pct(accuracy)}",
-        f"- avg confidence score: {_fmt(avg_score)}",
+        f"- avg estimate-weighted score: {_fmt(avg_score)}",
         f"- avg realized return: {_pct_value(avg_return)}",
     ])
 
@@ -366,6 +436,27 @@ def _normalize_confidence(value: float) -> float:
     if math.isnan(confidence):
         confidence = 0.5
     return min(max(confidence, 0.0), 1.0)
+
+
+def _optional_confidence(value: float | None) -> float | None:
+    return None if value is None else _normalize_confidence(value)
+
+
+def _confidence_summary(record: PredictionRecord) -> str:
+    confidence_kind = getattr(record, "confidence_kind", "legacy_unspecified")
+    calibrated_probability = getattr(record, "calibrated_probability", None)
+    if confidence_kind == "historical_calibrated" and calibrated_probability is not None:
+        samples = int(getattr(record, "calibration_samples", 0) or 0)
+        return f"calibrated_hit_rate={calibrated_probability:.1%}(n={samples})"
+    signal_strength = getattr(record, "signal_strength", None)
+    strength = signal_strength if signal_strength is not None else record.confidence
+    return f"signal={strength:.2f}({confidence_kind};not_probability)"
+
+
+def _interval(low: float | None, high: float | None) -> str:
+    if low is None or high is None:
+        return ""
+    return f", 95% interval {low:.1%}-{high:.1%}"
 
 
 def _iso(value: datetime) -> str:

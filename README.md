@@ -14,9 +14,9 @@ Language / 语言: 中文 | [English](README_EN.md)
 - 结构化报告：价格、走势、基本面、技术面、新闻、风险和研究结论。
 - 研究质量门禁：信息丰富度 A/B/C、数据缺口、快速否决/重审信号、下一步核验。
 - 投资框架：巴菲特/芒格、段永平、李录、达利欧。
-- 多智能体辩论：Bull、Bear、Value、Macro/Risk、Anti-Bias 五个模型独立分析，Bull/Bear 交叉反驳后由独立 Judge 裁决；所有观点引用同一份编号证据，代码校验数字和置信度。模型不可用时会在终端明确提示并切换到原有 11 角色规则模式。
-- 预测评分闭环：记录每次看涨/看跌/中性判断，按真实后续价格评估命中率、置信度和高置信错判。
-- 历史学习预测：从历史 K 线 walk-forward 学习可解释特征，生成方向/置信度，并沉淀为 Skill。
+- 多智能体辩论：Bull、Bear、Value、Macro/Risk、Anti-Bias 五个模型独立分析，Bull/Bear 交叉反驳后由独立 Judge 裁决；所有观点引用同一份编号证据，代码校验数字和主观信号强度。模型不可用时会在终端明确提示并切换到原有 11 角色规则模式。
+- 预测评分闭环：记录每次看涨/看跌/中性判断，区分启发式、用户/模型主观信号与历史校准命中率，并按真实后续价格评分。
+- 历史学习预测：从历史 K 线 walk-forward 学习可解释特征；未校准数值只显示为信号强度，不冒充概率。
 - 模拟投资账户：给 agent 100 万纸面资金，按股票池评分、计算买入数量和仓位，并每日记录净值；支持只读诊断弱持仓和替换候选。
 - 策略辅助：移动均线交叉策略回测。
 - 自选股简报：批量生成跟踪摘要。
@@ -214,9 +214,9 @@ FINANCE_PORTFOLIO_DIR=~/.finance-agent/portfolios
 
 金融自进化会把偏好、纠错、数据源经验和风险规则写入 `.finance_agent/finance_memory.jsonl`。核心 `skills/finance-research-evolution/SKILL.md` 保持稳定；如果确实需要生成新的专用 Skill，可以通过底层 `finance_evolve_from_trace` 指定独立 `skill_name`。本地 memory 目录已被 git 忽略；写入 Skill 前会脱敏常见 key/token/cookie。
 
-预测评分闭环会把每次方向判断保存到 `.finance_agent/predictions.jsonl`，包含 baseline 价格、期限、置信度和 thesis。到期后运行 `/predict eval`，系统会拉取最新价格并计算方向命中、实际收益和置信度加权分数。`/predict eval all` 可用于 Demo 立即评分未到期预测；`/predict learn` 会按方向桶、命中率、置信度失误和高置信错判生成复盘，用来量化研究框架是否真的有效。`/predict learn save` 会把复盘写入金融 memory，后续可用 `/memory list` 查看。
+预测评分闭环会把每次方向判断保存到 `.finance_agent/predictions.jsonl`，包含 baseline 价格、期限、信号证据类型和 thesis。系统使用过去数据生成时间有序、互不重叠的 walk-forward 样本；只有同方向样本至少 30 个时，才输出 Beta 平滑的历史校准命中率、样本数和 95% 区间。样本不足、模型或用户输入的数值只显示为“信号强度，非统计概率”。到期后运行 `/predict eval`，系统使用到期日或之后首个交易日收盘价计算方向命中和实际收益。`/predict eval all` 仅用于 Demo 立即评分未到期预测；`/predict learn` 生成事后复盘。
 
-历史学习预测会把历史 K 线切成 walk-forward 样本，学习当前特征桶在历史上对应的未来收益和胜率。`/learn-history AAPL 2y 20` 会输出方向、置信度、样本数和匹配特征，把结果写入 `.finance_agent/history_learning.jsonl`，同时更新 `skills/finance-history-learning/SKILL.md` 并记录一条可到期评分的预测。
+历史学习预测会把历史 K 线切成 walk-forward 样本，学习当前特征桶在历史上对应的未来收益和胜率。`/learn-history AAPL 2y 20` 会输出方向、启发式信号强度、样本数和匹配特征，把结果写入 `.finance_agent/history_learning.jsonl`，同时更新 `skills/finance-history-learning/SKILL.md` 并记录一条可到期评分的预测。
 
 模拟投资账户默认持久化到 `~/.finance-agent/portfolios/portfolio_default.json`，不受启动目录、新终端或代码 worktree 影响。首次运行会自动迁移旧的 `.finance_agent/portfolio_default.json`；重新初始化前会在 `backups/` 保留时间戳备份。可用 `FINANCE_PORTFOLIO_DIR` 指定其他持久化目录。`/portfolio init 1000000 AAPL MSFT NVDA` 会根据当前行情、基本面、技术面和数据源置信度生成纸面持仓并记录 BUY 交易；评分会拆成动量、质量、风险和数据置信度，弱相对强度会被明确降权。`/portfolio review GOOGL AVGO ...` 会只读诊断当前持仓、弱项和替换候选，不会改仓；`/portfolio mark` 会按最新价格追加一条净值记录；`/portfolio sell AMD all <理由>` 会模拟卖出并记录 SELL、实现盈亏和理由；`/portfolio trades` 查看交易流水；`/portfolio pnl` 按天汇总买入额、卖出额、已实现盈亏、期末净值和当日净值变化；`/portfolio rebalance ...` 会用新的股票池重新计算仓位并记录买卖差额。它只做纸面组合，不会连接真实券商或真实下单。
 

@@ -6,8 +6,8 @@ from finance.predictions import (
     evaluation_history_period,
     evaluate_due_predictions,
     load_predictions,
-    record_prediction,
     render_learning_report,
+    render_prediction_record,
     render_predictions,
     render_scorecard,
     select_due_close,
@@ -71,33 +71,22 @@ def _prediction_record(
     symbol: str,
     direction: str,
     horizon_days: int = 30,
-    confidence: float = 0.5,
+    confidence: float | None = None,
     thesis: str = "",
 ) -> str:
     from finance.agent import FinanceResearchAgent
 
     agent = FinanceResearchAgent()
-    snapshot = agent.snapshot(symbol, "3mo", 0)
-    record = record_prediction(
-        symbol=snapshot.symbol,
+    record = agent.create_prediction_record(
+        symbol=symbol,
         direction=direction,
         horizon_days=horizon_days,
-        confidence=confidence,
+        signal_strength=confidence,
+        signal_source="model_supplied",
+        use_calibration=True,
         thesis=thesis or "manual prediction",
-        baseline_price=snapshot.quote.price,
-        baseline_as_of=snapshot.quote.as_of,
-        source=snapshot.quote.source,
     )
-    return "\n".join([
-        "Prediction recorded:",
-        f"- id: {record.id}",
-        f"- symbol: {record.symbol}",
-        f"- direction: {record.direction}",
-        f"- horizon_days: {record.horizon_days}",
-        f"- confidence: {record.confidence:.2f}",
-        f"- baseline: {record.baseline_price} ({record.baseline_as_of})",
-        f"- due_at: {record.due_at}",
-    ])
+    return render_prediction_record(record)
 
 
 def _prediction_list(limit: int = 20) -> str:
@@ -184,14 +173,20 @@ finance_evolve_from_trace_tool = Tool(
 
 prediction_record_tool = Tool(
     name="prediction_record",
-    description="记录一次股票方向预测，保存 baseline 价格、期限、置信度和 thesis，用于未来事后评分。",
+    description=(
+        "记录一次股票方向预测，保存 baseline、期限和 thesis，并用严格时间顺序的"
+        "walk-forward 样本尝试校准。confidence 只是可选主观信号强度，不是统计概率。"
+    ),
     parameters={
         "type": "object",
         "properties": {
             "symbol": {"type": "string"},
             "direction": {"type": "string", "description": "up/down/neutral"},
             "horizon_days": {"type": "integer"},
-            "confidence": {"type": "number"},
+            "confidence": {
+                "type": "number",
+                "description": "可选主观信号强度 0-1；不得声称为历史校准概率",
+            },
             "thesis": {"type": "string"},
         },
         "required": ["symbol", "direction"],
@@ -215,7 +210,7 @@ prediction_evaluate_tool = Tool(
 
 prediction_learn_tool = Tool(
     name="prediction_learn",
-    description="根据已评分预测生成复盘报告，量化哪些方向、置信度和 thesis 类型表现较弱，可保存到金融记忆。",
+    description="根据已评分预测生成复盘报告，量化哪些方向、估计证据类型和 thesis 表现较弱，可保存到金融记忆。",
     parameters={"type": "object", "properties": {"save_to_memory": {"type": "boolean"}}},
     run=_prediction_learn,
 )

@@ -7,9 +7,15 @@ import re
 from .backtest import backtest_moving_average_cross, format_backtest, parse_strategy
 from .data import ProviderChain, export_history_csv
 from .debate_orchestrator import ModelDebateOrchestrator, render_debate_outcomes
-from .history_learning import learn_from_history, render_learning, save_learning, update_history_learning_skill
+from .history_learning import (
+    calibrate_momentum_signal,
+    learn_from_history,
+    render_learning,
+    save_learning,
+    update_history_learning_skill,
+)
 from .indicators import calculate_indicators, format_indicators
-from .models import Financials, Quote, StockSnapshot, utc_now_iso
+from .models import Candle, Financials, Quote, StockSnapshot, utc_now_iso
 from .paper_portfolio import (
     construct_portfolio,
     load_account,
@@ -23,7 +29,7 @@ from .paper_portfolio import (
     sell_holding,
     score_candidates,
 )
-from .predictions import record_prediction
+from .predictions import PredictionRecord, record_prediction, render_prediction_record
 from .quality import render_quality_screen
 from .report import render_comparison, render_daily_brief, render_financials, render_stock_report
 from .resolver import resolve_symbol, resolve_symbol_text
@@ -273,6 +279,8 @@ class FinanceResearchAgent:
                 direction=judge.direction,
                 horizon_days=judge.horizon_days,
                 confidence=judge.confidence,
+                confidence_kind="model_supplied" if outcome.mode == "model" else "heuristic_signal",
+                signal_strength=judge.confidence,
                 thesis=thesis,
                 baseline_price=snapshot.quote.price,
                 baseline_as_of=snapshot.quote.as_of,
@@ -281,7 +289,7 @@ class FinanceResearchAgent:
             mode = "model judge" if outcome.mode == "model" else "rule fallback"
             recorded.append(
                 f"{prediction.symbol}:{prediction.id} "
-                f"({mode}, {prediction.direction}, {prediction.confidence:.0%})"
+                f"({mode}, {prediction.direction}, signal {prediction.confidence * 100:.0f}/100, not probability)"
             )
         return output + "\n\nPredictions recorded: " + ", ".join(recorded)
 
@@ -422,6 +430,8 @@ class FinanceResearchAgent:
                 direction=rule.predicted_direction,
                 horizon_days=horizon_days,
                 confidence=rule.confidence,
+                confidence_kind="heuristic_signal",
+                signal_strength=rule.confidence,
                 thesis=f"history-learning expected_return={rule.expected_return_pct:.2f}% features={rule.current_features}",
                 baseline_price=float(history[-1].close),
                 baseline_as_of=history[-1].date,
@@ -482,48 +492,85 @@ class FinanceResearchAgent:
         lines = ["Prediction records (saved to scorecard):"]
         for symbol in _unique_symbols(symbols):
             try:
-                normalized = _resolve_symbol(symbol)
-                baseline_price, baseline_as_of, source, indicators = self._prediction_inputs(normalized)
-                inferred_direction, inferred_confidence = _indicators_prediction(indicators)
-                direction = requested_direction or inferred_direction
-                confidence = requested_confidence if requested_confidence is not None else inferred_confidence
-                prediction = record_prediction(
-                    symbol=normalized,
-                    direction=direction,
+                prediction = self.create_prediction_record(
+                    symbol=symbol,
+                    direction=requested_direction,
                     horizon_days=horizon,
-                    confidence=confidence,
-                    thesis=f"{task}; indicators={indicators.get('summary', '暂无技术摘要')}",
-                    baseline_price=baseline_price,
-                    baseline_as_of=baseline_as_of,
-                    source=source,
+                    signal_strength=requested_confidence,
+                    signal_source="user_supplied" if requested_confidence is not None else "heuristic_signal",
+                    use_calibration=requested_confidence is None,
+                    thesis=task,
                 )
-                lines.append(
-                    f"- {prediction.symbol} direction={prediction.direction} confidence={prediction.confidence:.2f} "
-                    f"baseline={prediction.baseline_price} source={prediction.source} id={prediction.id} due={prediction.due_at}"
-                )
+                lines.extend(["", render_prediction_record(prediction)])
             except Exception as exc:  # noqa: BLE001 - keep other symbols recordable
                 lines.append(f"- {symbol}: 未记录（真实基准价格不可用：{_compact_error(exc)}）")
         return "\n".join(lines)
 
+    def create_prediction_record(
+        self,
+        *,
+        symbol: str,
+        direction: str | None = None,
+        horizon_days: int = 30,
+        signal_strength: float | None = None,
+        signal_source: str = "heuristic_signal",
+        use_calibration: bool = True,
+        thesis: str = "",
+    ) -> PredictionRecord:
+        normalized = _resolve_symbol(symbol)
+        baseline_price, baseline_as_of, source, history, indicators = self._prediction_inputs(normalized)
+        calibration = calibrate_momentum_signal(
+            history,
+            horizon_days=horizon_days,
+            direction=direction,
+        )
+        final_direction = direction or calibration.direction
+        raw_strength = signal_strength if signal_strength is not None else calibration.signal_strength
+        if use_calibration and calibration.calibrated_probability is not None:
+            estimate = calibration.calibrated_probability
+            confidence_kind = "historical_calibrated"
+        else:
+            estimate = raw_strength
+            confidence_kind = signal_source if signal_strength is not None else "heuristic_signal"
+        technical_summary = indicators.get("trend_summary", "暂无技术摘要")
+        return record_prediction(
+            symbol=normalized,
+            direction=final_direction,
+            horizon_days=horizon_days,
+            confidence=estimate,
+            confidence_kind=confidence_kind,
+            signal_strength=raw_strength,
+            calibrated_probability=calibration.calibrated_probability,
+            calibration_samples=calibration.sample_count,
+            calibration_hits=calibration.hits,
+            calibration_interval_low=calibration.interval_low,
+            calibration_interval_high=calibration.interval_high,
+            calibration_method=calibration.method,
+            thesis=f"{thesis or 'prediction'}; indicators={technical_summary}",
+            baseline_price=baseline_price,
+            baseline_as_of=baseline_as_of,
+            source=source,
+        )
+
     @_with_provider_request_deadline
-    def _prediction_inputs(self, symbol: str) -> tuple[float, str, str, dict]:
+    def _prediction_inputs(self, symbol: str) -> tuple[float, str, str, list[Candle], dict]:
         reset_coverage = getattr(self.provider, "reset_coverage", None)
         if callable(reset_coverage):
             reset_coverage()
         try:
-            history = self.provider.get_history(symbol, "1y", "1d")
+            history = self.provider.get_history(symbol, "5y", "1d")
         except Exception:
             history = []
         latest = next((candle for candle in reversed(history) if candle.close is not None), None)
         if latest is not None:
             coverage = _source_coverage(self.provider).get("get_history", {})
             source = str(coverage.get("selected_source") or getattr(self.provider, "name", "HISTORY"))
-            return float(latest.close), latest.date, source, calculate_indicators(history)
+            return float(latest.close), latest.date, source, history, calculate_indicators(history)
 
         quote = self.provider.get_quote(symbol)
         if quote.price is None:
             raise ValueError("行情和历史价格均无可用基准价")
-        return float(quote.price), quote.as_of, quote.source or "QUOTE", calculate_indicators(history)
+        return float(quote.price), quote.as_of, quote.source or "QUOTE", history, calculate_indicators(history)
 
     def verify_symbol_task(self, task: str, symbol: str) -> str:
         normalized = _resolve_symbol(symbol)
@@ -668,13 +715,6 @@ def _extract_confidence(task: str) -> float | None:
         return None
     value = float(match.group(1))
     return value / 100 if value > 1 else value
-
-
-def _indicators_prediction(indicators: dict) -> tuple[str, float]:
-    trend = indicators.get("return_3m_pct")
-    if trend is None or abs(float(trend)) < 2:
-        return "neutral", 0.5
-    return ("up" if trend > 0 else "down"), min(0.5 + abs(float(trend)) / 100, 0.85)
 
 
 def _is_live_trade_task(task: str) -> bool:

@@ -604,7 +604,7 @@ def test_prediction_learning_report_groups_evaluated_records(tmp_path) -> None: 
 
     assert "Prediction scorecard" in output
     assert "Direction buckets" in output
-    assert "high-confidence misses" in output
+    assert "high-estimate misses" in output
 
 
 def test_parse_strategy_notes_reordered_windows() -> None:

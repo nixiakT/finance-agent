@@ -189,7 +189,7 @@ def test_debate_fetches_one_snapshot_and_records_validated_judge_prediction(
     assert records[0].horizon_days == 30
     assert "下行风险略占上风" in records[0].thesis
     assert "Q1, T1" in records[0].thesis
-    assert "model judge, down, 85%" in output
+    assert "model judge, down, signal 85/100, not probability" in output
 
 
 def _snapshot(symbol: str = "AAPL") -> StockSnapshot:

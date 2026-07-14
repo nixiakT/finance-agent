@@ -19,6 +19,7 @@ from finance.predictions import (
     load_predictions,
     record_prediction,
     render_learning_report,
+    render_prediction_record,
     render_predictions,
     render_scorecard,
     select_due_close,
@@ -455,22 +456,32 @@ class CommandRouter:
                 "horizon_days": horizon,
                 "confidence": confidence,
             })
-            snapshot = self.finance.snapshot(symbol, "3mo", 0)
-            record = record_prediction(
-                symbol=snapshot.symbol,
-                direction=direction,
-                horizon_days=horizon,
-                confidence=confidence,
-                thesis=thesis,
-                baseline_price=snapshot.quote.price,
-                baseline_as_of=snapshot.quote.as_of,
-                source=snapshot.quote.source,
-            )
-            output = (
-                f"Prediction recorded: {record.id} {record.symbol} {record.direction} "
-                f"{record.horizon_days}d confidence={record.confidence:.2f} "
-                f"baseline={record.baseline_price} due={record.due_at}"
-            )
+            create_prediction = getattr(self.finance, "create_prediction_record", None)
+            if callable(create_prediction):
+                record = create_prediction(
+                    symbol=symbol,
+                    direction=direction,
+                    horizon_days=horizon,
+                    signal_strength=confidence,
+                    signal_source="user_supplied",
+                    use_calibration=False,
+                    thesis=thesis,
+                )
+            else:
+                snapshot = self.finance.snapshot(symbol, "3mo", 0)
+                record = record_prediction(
+                    symbol=snapshot.symbol,
+                    direction=direction,
+                    horizon_days=horizon,
+                    confidence=confidence,
+                    confidence_kind="user_supplied",
+                    signal_strength=confidence,
+                    thesis=thesis,
+                    baseline_price=snapshot.quote.price,
+                    baseline_as_of=snapshot.quote.as_of,
+                    source=snapshot.quote.source,
+                )
+            output = render_prediction_record(record)
             return self._with_result_trace("prediction_record", output)
         if action == "eval":
             include_not_due = len(args) > 1 and args[1].lower() in {"all", "--all", "now"}
