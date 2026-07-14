@@ -183,6 +183,62 @@ def test_get_financials_does_not_repeat_quote_or_history_requests() -> None:
     assert "2026-06-30" in output
 
 
+def test_prediction_records_use_history_without_quote_financials_or_news(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import finance.agent as finance_agent
+
+    class PredictionProvider:
+        name = "HISTORY_ONLY"
+
+        def __init__(self) -> None:
+            self.history_calls: list[str] = []
+            self.quote_calls = 0
+            self.financial_calls = 0
+            self.news_calls = 0
+
+        def get_history(self, symbol: str, period: str, interval: str) -> list[Candle]:
+            self.history_calls.append(symbol)
+            return [
+                Candle(
+                    (date(2026, 1, 1) + timedelta(days=index)).isoformat(),
+                    100 + index,
+                    100 + index,
+                    100 + index,
+                    100 + index,
+                )
+                for index in range(90)
+            ]
+
+        def get_quote(self, symbol: str) -> Quote:
+            self.quote_calls += 1
+            raise AssertionError("prediction should not fetch a quote when history is available")
+
+        def get_financials(self, symbol: str) -> Financials:
+            self.financial_calls += 1
+            raise AssertionError("prediction should not fetch fundamentals")
+
+        def get_news(self, symbol: str, limit: int = 5) -> list[NewsItem]:
+            self.news_calls += 1
+            raise AssertionError("prediction should not fetch news")
+
+    def fake_record_prediction(**kwargs):  # noqa: ANN003, ANN201
+        return type("Prediction", (), {**kwargs, "id": f"pred-{kwargs['symbol']}", "due_at": "2026-08-13"})()
+
+    monkeypatch.setattr(finance_agent, "record_prediction", fake_record_prediction)
+    provider = PredictionProvider()
+    agent = FinanceResearchAgent(provider=provider)  # type: ignore[arg-type]
+
+    output = agent.record_task_predictions("记录未来30天涨跌方向", ["AAPL", "MSFT"])
+
+    assert provider.history_calls == ["AAPL", "MSFT"]
+    assert provider.quote_calls == 0
+    assert provider.financial_calls == 0
+    assert provider.news_calls == 0
+    assert "pred-AAPL" in output
+    assert "pred-MSFT" in output
+
+
 def test_route_task_portfolio_review_handles_direct_tickers_without_resolver_network(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:  # noqa: ANN001
     import finance.paper_portfolio as portfolio
     import finance.agent as finance_agent
@@ -716,7 +772,7 @@ def test_route_task_records_five_real_baseline_predictions(tmp_path, monkeypatch
 
     assert len(records) == 5
     assert all(record.direction == "up" and record.confidence == 0.75 for record in records)
-    assert all(record.baseline_price == 123.45 and record.source == "STATIC" for record in records)
+    assert all(record.baseline_price == 219 and record.source == "STATIC" for record in records)
     assert all(record.symbol in output for record in records)
 
 

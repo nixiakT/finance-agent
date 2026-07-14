@@ -278,6 +278,8 @@ FINANCE_ALLOW_SAMPLE_FALLBACK=1
 
 真实来源会并发查询，每类数据共享一个操作时限，整份快照也有总时限；超时源会被记入失败覆盖并暂时熔断，不会阻塞已成功的备用源。可用 `FINANCE_PROVIDER_TIMEOUT_SECONDS`、`FINANCE_SNAPSHOT_TIMEOUT_SECONDS` 和 `FINANCE_PROVIDER_COOLDOWN_SECONDS` 调整，默认分别为 25、45、60 秒。
 
+真实数据结果使用进程内 TTL 缓存，默认行情 60 秒、历史价格 900 秒、基本面 21600 秒、新闻 600 秒。可分别通过 `FINANCE_QUOTE_CACHE_TTL_SECONDS`、`FINANCE_HISTORY_CACHE_TTL_SECONDS`、`FINANCE_FINANCIALS_CACHE_TTL_SECONDS` 和 `FINANCE_NEWS_CACHE_TTL_SECONDS` 调整；设为 `0` 可关闭对应缓存。缓存命中状态和缓存年龄会写入来源覆盖信息。
+
 行情查询所有适用真实源，优先选择更新且实时的结果，并记录最大价差。历史 K 线同样查询全部适用真实源，统一使用未复权收盘价，选择更新/更完整的序列，并报告重叠日期价差。基本面查询全部适用真实源，只在币种、报告期和期间口径兼容时补齐字段，并报告重叠字段差异。新闻聚合全部适用真实源，做相关性过滤、跨源去重和来源多样化后再截取数量；质量评级只把近 180 天事件算作近期覆盖。AKShare 基本面适配 A 股、港股和美股公开财务指标；样例 fallback 不会被计入真实来源或交叉验证。
 
 Yahoo 新闻会先扩大候选集，再用 ticker、查询代码和公司名中的特异词过滤，会丢弃 `technology`、`group`、`inc` 这类通用词造成的错配。无强相关结果时会明确说明“暂无/被过滤”；接口异常则单独说明失败原因。

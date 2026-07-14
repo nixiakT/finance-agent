@@ -6,6 +6,7 @@ marked sample data when the network/API is unavailable.
 from __future__ import annotations
 
 import csv
+from copy import deepcopy
 from contextlib import contextmanager
 import math
 import os
@@ -90,6 +91,27 @@ _FINANCIAL_FIELD_LABELS = {
     "debt_to_equity": "杠杆",
     "return_on_equity": "ROE",
     "profit_margin": "利润率",
+}
+
+_QUOTE_PRIMARY_FIELDS = (
+    "name",
+    "currency",
+    "price",
+    "previous_close",
+    "change",
+    "change_percent",
+    "volume",
+    "market_cap",
+    "pe_ratio",
+    "eps",
+)
+_QUOTE_SUPPLEMENT_FIELDS = ("name", "currency", "market_cap", "pe_ratio", "eps")
+_QUOTE_FIELD_LABELS = {
+    "name": "名称",
+    "currency": "币种",
+    "market_cap": "市值",
+    "pe_ratio": "PE",
+    "eps": "EPS",
 }
 
 
@@ -443,7 +465,7 @@ class TushareProvider:
         daily = daily.sort_values("trade_date")
         latest = daily.iloc[-1]
         previous = daily.iloc[-2] if len(daily) > 1 else None
-        basics = self._daily_basic(pro, ts_code)
+        basics, basics_error = self._daily_basic(pro, ts_code)
         name = self._stock_name(pro, ts_code)
         price = _to_float(latest.get("close"))
         previous_close = _to_float(previous.get("close")) if previous is not None else _to_float(latest.get("pre_close"))
@@ -454,6 +476,9 @@ class TushareProvider:
             else _to_float(latest.get("pct_chg"))
         )
         trade_date = str(latest.get("trade_date", ""))
+        notes = ["Tushare daily data is end-of-day data; volume was converted from lots (100 shares) to shares."]
+        if basics_error:
+            notes.append(f"Tushare daily_basic enrichment unavailable: {basics_error}")
         return Quote(
             symbol=normalized,
             name=name,
@@ -468,7 +493,7 @@ class TushareProvider:
             source=self.name,
             as_of=_format_trade_date(trade_date),
             is_realtime=False,
-            notes=["Tushare daily data is end-of-day data; volume was converted from lots (100 shares) to shares."],
+            notes=notes,
         )
 
     def get_history(self, symbol: str, period: str = "1y", interval: str = "1d") -> list[Candle]:
@@ -494,7 +519,7 @@ class TushareProvider:
     def get_financials(self, symbol: str) -> Financials:
         normalized, ts_code = self._require_a_share(symbol)
         pro = self._client()
-        basics = self._daily_basic(pro, ts_code)
+        basics, basics_error = self._daily_basic(pro, ts_code)
         income, cashflow, fina_indicator, report_date = self._aligned_reports(pro, ts_code)
         revenue = _to_float(income.get("total_revenue") or income.get("revenue"))
         net_income = _to_float(income.get("n_income_attr_p") or income.get("net_profit"))
@@ -526,21 +551,21 @@ class TushareProvider:
                 "Tushare fundamentals depend on token permission and reporting availability.",
                 "Tushare ROE 已从百分数归一化为比率；资产负债率已换算为债务/权益百分比。",
                 "自由现金流仅使用明确 FCF，或由经营现金流减资本开支计算；缺少资本开支时保留为空。",
-            ],
+            ] + ([f"Tushare daily_basic enrichment unavailable: {basics_error}"] if basics_error else []),
         )
 
     def get_news(self, symbol: str, limit: int = 5) -> list[NewsItem]:
         raise ProviderError("Tushare news is not enabled in this provider")
 
-    def _daily_basic(self, pro: Any, ts_code: str) -> dict[str, Any]:
+    def _daily_basic(self, pro: Any, ts_code: str) -> tuple[dict[str, Any], str]:
         try:
             start_date, end_date = _date_window("1mo")
             data = pro.daily_basic(ts_code=ts_code, start_date=start_date, end_date=end_date)
             if data is not None and not data.empty:
-                return data.sort_values("trade_date").iloc[-1].to_dict()
-        except Exception:
-            return {}
-        return {}
+                return data.sort_values("trade_date").iloc[-1].to_dict(), ""
+        except Exception as exc:
+            return {}, _compact_provider_error(exc)
+        return {}, "empty result"
 
     def _stock_name(self, pro: Any, ts_code: str) -> str:
         try:
@@ -915,8 +940,20 @@ class ProviderChain:
         self._provider_inflight_lock = threading.Lock()
         self._request_deadline: float | None = None
         self._coverage: dict[str, dict[str, Any]] = {}
+        self._cache_ttls = {
+            "get_quote": _nonnegative_env_float("FINANCE_QUOTE_CACHE_TTL_SECONDS", 60.0),
+            "get_history": _nonnegative_env_float("FINANCE_HISTORY_CACHE_TTL_SECONDS", 900.0),
+            "get_financials": _nonnegative_env_float("FINANCE_FINANCIALS_CACHE_TTL_SECONDS", 21_600.0),
+            "get_news": _nonnegative_env_float("FINANCE_NEWS_CACHE_TTL_SECONDS", 600.0),
+        }
+        self._cache: dict[tuple[Any, ...], tuple[float, Any, dict[str, Any]]] = {}
+        self._cache_lock = threading.Lock()
 
     def get_quote(self, symbol: str) -> Quote:
+        cache_key = (normalize_symbol(symbol),)
+        cached = self._cache_get("get_quote", cache_key)
+        if cached is not None:
+            return cached
         operation_timeout = self._operation_timeout_or_raise("get_quote")
         successful: list[tuple[str, Quote]] = []
         failures: list[dict[str, str]] = []
@@ -953,6 +990,33 @@ class ProviderChain:
                 successful,
                 key=lambda row: (row[1].is_realtime, row[1].as_of or ""),
             )
+            selected = deepcopy(selected)
+            selected.field_sources = {
+                field_name: selected.field_sources.get(field_name, selected_name)
+                for field_name in _QUOTE_PRIMARY_FIELDS
+                if _quote_value_present(getattr(selected, field_name))
+            }
+            supplemental_fields: list[str] = []
+            for provider_name, candidate in successful:
+                if provider_name == selected_name:
+                    continue
+                for field_name in _QUOTE_SUPPLEMENT_FIELDS:
+                    if _quote_value_present(getattr(selected, field_name)):
+                        continue
+                    value = getattr(candidate, field_name)
+                    if not _quote_value_present(value):
+                        continue
+                    if not _quote_field_compatible(selected, candidate, field_name):
+                        continue
+                    setattr(selected, field_name, value)
+                    selected.field_sources[field_name] = candidate.field_sources.get(field_name, provider_name)
+                    supplemental_fields.append(field_name)
+            if supplemental_fields:
+                detail = "、".join(
+                    f"{_QUOTE_FIELD_LABELS[field_name]}={selected.field_sources[field_name]}"
+                    for field_name in dict.fromkeys(supplemental_fields)
+                )
+                selected.notes.append(f"行情缺失字段由其他真实来源补充: {detail}。")
             spread = _quote_price_spread(successful)
             selected.source_spread_pct = spread
             self._record_coverage(
@@ -962,8 +1026,10 @@ class ProviderChain:
                 selected_source=selected.source or selected_name,
                 sample_used=False,
                 price_spread_pct=spread,
+                field_sources=selected.field_sources,
             )
             _extend_unique(selected.notes, self.report_notes("get_quote"))
+            self._cache_set("get_quote", cache_key, selected)
             return selected
 
         sample_failures: list[str] = []
@@ -997,6 +1063,10 @@ class ProviderChain:
         raise ProviderError(_coverage_error(failures, sample_failures, "get_quote"))
 
     def get_history(self, symbol: str, period: str = "1y", interval: str = "1d") -> list[Candle]:
+        cache_key = (normalize_symbol(symbol), period, interval)
+        cached = self._cache_get("get_history", cache_key)
+        if cached is not None:
+            return cached
         operation_timeout = self._operation_timeout_or_raise("get_history")
         successful: list[tuple[str, list[Candle]]] = []
         failures: list[dict[str, str]] = []
@@ -1042,6 +1112,7 @@ class ProviderChain:
                 sample_used=False,
                 history_close_spread_pct=close_spread,
             )
+            self._cache_set("get_history", cache_key, selected)
             return selected
 
         sample_failures: list[str] = []
@@ -1071,6 +1142,10 @@ class ProviderChain:
         raise ProviderError(_coverage_error(failures, sample_failures, "get_history"))
 
     def get_financials(self, symbol: str) -> Financials:
+        cache_key = (normalize_symbol(symbol),)
+        cached = self._cache_get("get_financials", cache_key)
+        if cached is not None:
+            return cached
         operation_timeout = self._operation_timeout_or_raise("get_financials")
         successful: list[tuple[str, Financials]] = []
         failures: list[dict[str, str]] = []
@@ -1138,6 +1213,7 @@ class ProviderChain:
                 field_differences_pct=differences,
             )
             _extend_unique(merged.notes, self.report_notes("get_financials"))
+            self._cache_set("get_financials", cache_key, merged)
             return merged
 
         sample_failures: list[str] = []
@@ -1178,6 +1254,10 @@ class ProviderChain:
                 sample_used=False,
             )
             return []
+        cache_key = (normalize_symbol(symbol), limit)
+        cached = self._cache_get("get_news", cache_key)
+        if cached is not None:
+            return cached
         operation_timeout = self._operation_timeout_or_raise("get_news")
         successful_sources: list[str] = []
         failures: list[dict[str, str]] = []
@@ -1230,6 +1310,7 @@ class ProviderChain:
                 selected_source=" / ".join(source_names),
                 sample_used=False,
             )
+            self._cache_set("get_news", cache_key, result)
             return result
 
         sample_failures: list[str] = []
@@ -1312,6 +1393,38 @@ class ProviderChain:
         )
         raise ProviderError(_coverage_error(failures, sample_failures, method))
 
+    def _cache_get(self, method: str, args: tuple[Any, ...]) -> Any | None:
+        ttl = self._cache_ttls.get(method, 0.0)
+        if ttl <= 0:
+            return None
+        key = (method, *args)
+        now = time.monotonic()
+        with self._cache_lock:
+            entry = self._cache.get(key)
+            if entry is None:
+                return None
+            stored_at, value, coverage = entry
+            age = now - stored_at
+            if age >= ttl:
+                self._cache.pop(key, None)
+                return None
+            cached_value = deepcopy(value)
+            cached_coverage = deepcopy(coverage)
+        cached_coverage["cache_hit"] = True
+        cached_coverage["cache_age_seconds"] = age
+        self._coverage[method] = cached_coverage
+        return cached_value
+
+    def _cache_set(self, method: str, args: tuple[Any, ...], value: Any) -> None:
+        if self._cache_ttls.get(method, 0.0) <= 0:
+            return
+        coverage = self.source_coverage(method)
+        coverage["cache_hit"] = False
+        coverage["cache_age_seconds"] = 0.0
+        key = (method, *args)
+        with self._cache_lock:
+            self._cache[key] = (time.monotonic(), deepcopy(value), coverage)
+
     @contextmanager
     def request_deadline(self):  # noqa: ANN201
         """Share one wall-clock budget across a multi-operation snapshot."""
@@ -1358,6 +1471,7 @@ class ProviderChain:
             "successful_real_sources": list(row["successful_real_sources"]),
             "failed_real_sources": [dict(item) for item in row["failed_real_sources"]],
             "field_differences_pct": dict(row["field_differences_pct"]),
+            "field_sources": dict(row["field_sources"]),
         }
 
     def report_notes(self, method: str | None = None) -> list[str]:
@@ -1371,6 +1485,8 @@ class ProviderChain:
             sources = coverage["successful_real_sources"]
             if sources:
                 notes.append(f"{label}真实来源覆盖: {'、'.join(sources)}。")
+            if coverage.get("cache_hit"):
+                notes.append(f"{label}使用 TTL 缓存，缓存年龄 {coverage.get('cache_age_seconds', 0):.1f} 秒。")
             if coverage["sample_used"]:
                 notes.append(f"{label}使用 SAMPLE_FALLBACK；样例数据不属于真实来源，也不构成交叉验证。")
             failures = coverage["failed_real_sources"]
@@ -1404,6 +1520,7 @@ class ProviderChain:
         price_spread_pct: float | None = None,
         field_differences_pct: dict[str, float] | None = None,
         history_close_spread_pct: float | None = None,
+        field_sources: dict[str, str] | None = None,
     ) -> None:
         self._coverage[method] = {
             "method": method,
@@ -1414,6 +1531,9 @@ class ProviderChain:
             "price_spread_pct": price_spread_pct,
             "field_differences_pct": dict(field_differences_pct or {}),
             "history_close_spread_pct": history_close_spread_pct,
+            "field_sources": dict(field_sources or {}),
+            "cache_hit": False,
+            "cache_age_seconds": None,
         }
 
     @staticmethod
@@ -1427,6 +1547,9 @@ class ProviderChain:
             "price_spread_pct": None,
             "field_differences_pct": {},
             "history_close_spread_pct": None,
+            "field_sources": {},
+            "cache_hit": False,
+            "cache_age_seconds": None,
         }
 
     def diagnostics(self) -> list[dict[str, str]]:
@@ -1527,6 +1650,23 @@ def _collect_provider_calls(
 
 def _is_sample_provider(provider: MarketDataProvider) -> bool:
     return isinstance(provider, SampleDataProvider) or provider.name == "SAMPLE_FALLBACK"
+
+
+def _quote_value_present(value: Any) -> bool:
+    return value is not None and value != ""
+
+
+def _quote_field_compatible(primary: Quote, candidate: Quote, field_name: str) -> bool:
+    if normalize_symbol(primary.symbol) != normalize_symbol(candidate.symbol):
+        return False
+    if (
+        field_name in {"market_cap", "eps"}
+        and primary.currency
+        and candidate.currency
+        and primary.currency != candidate.currency
+    ):
+        return False
+    return True
 
 
 def _financials_have_data(financials: Financials) -> bool:
@@ -1881,6 +2021,14 @@ def _positive_env_float(name: str, default: float) -> float:
     except (TypeError, ValueError):
         return default
     return value if math.isfinite(value) and value > 0 else default
+
+
+def _nonnegative_env_float(name: str, default: float) -> float:
+    try:
+        value = float(os.environ.get(name, str(default)))
+    except (TypeError, ValueError):
+        return default
+    return value if math.isfinite(value) and value >= 0 else default
 
 
 def _sample_profile(symbol: str) -> dict[str, Any]:

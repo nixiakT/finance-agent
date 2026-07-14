@@ -143,6 +143,172 @@ def test_quote_cross_check_selects_the_fresh_realtime_result() -> None:
     assert chain.source_coverage("get_quote")["selected_source"] == "FRESH"
 
 
+def test_quote_cross_check_fills_missing_valuation_without_replacing_primary_price() -> None:
+    class DetailedQuoteProvider:
+        def __init__(
+            self,
+            name: str,
+            price: float,
+            *,
+            as_of: str,
+            is_realtime: bool,
+            market_cap: float | None = None,
+            pe_ratio: float | None = None,
+        ) -> None:
+            self.name = name
+            self.price = price
+            self.as_of = as_of
+            self.is_realtime = is_realtime
+            self.market_cap = market_cap
+            self.pe_ratio = pe_ratio
+
+        def get_quote(self, symbol: str) -> Quote:
+            return Quote(
+                symbol=symbol,
+                currency="CNY",
+                price=self.price,
+                market_cap=self.market_cap,
+                pe_ratio=self.pe_ratio,
+                source=self.name,
+                as_of=self.as_of,
+                is_realtime=self.is_realtime,
+            )
+
+    valuation = DetailedQuoteProvider(
+        "AKSHARE",
+        100,
+        as_of="2026-07-13",
+        is_realtime=False,
+        market_cap=1_500_000_000_000,
+        pe_ratio=20,
+    )
+    primary = DetailedQuoteProvider("TUSHARE", 101, as_of="2026-07-14", is_realtime=True)
+    chain = ProviderChain(providers=[valuation, primary])
+
+    quote = chain.get_quote("600519")
+    coverage = chain.source_coverage("get_quote")
+
+    assert quote.source == "TUSHARE"
+    assert quote.price == 101
+    assert quote.market_cap == 1_500_000_000_000
+    assert quote.pe_ratio == 20
+    assert quote.field_sources["price"] == "TUSHARE"
+    assert quote.field_sources["market_cap"] == "AKSHARE"
+    assert quote.field_sources["pe_ratio"] == "AKSHARE"
+    assert coverage["field_sources"]["market_cap"] == "AKSHARE"
+
+
+def test_quote_cross_check_does_not_replace_primary_valuation() -> None:
+    primary = PricedProvider("PRIMARY", 101, as_of="2026-07-14", is_realtime=True)
+    supplemental = PricedProvider("SUPPLEMENTAL", 99, as_of="2026-07-13", is_realtime=False)
+    primary.get_quote = lambda symbol: Quote(  # type: ignore[method-assign]
+        symbol=symbol,
+        price=101,
+        market_cap=2_000,
+        pe_ratio=30,
+        source=primary.name,
+        as_of=primary.as_of,
+        is_realtime=True,
+    )
+    supplemental.get_quote = lambda symbol: Quote(  # type: ignore[method-assign]
+        symbol=symbol,
+        price=99,
+        market_cap=1_000,
+        pe_ratio=20,
+        source=supplemental.name,
+        as_of=supplemental.as_of,
+    )
+
+    quote = ProviderChain(providers=[supplemental, primary]).get_quote("AAPL")
+
+    assert quote.market_cap == 2_000
+    assert quote.pe_ratio == 30
+    assert quote.field_sources["market_cap"] == "PRIMARY"
+    assert quote.field_sources["pe_ratio"] == "PRIMARY"
+
+
+def test_quote_cache_reuses_results_and_returns_independent_copies(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("FINANCE_QUOTE_CACHE_TTL_SECONDS", "60")
+    provider = PricedProvider("COUNTED", 100)
+    calls = 0
+    original = provider.get_quote
+
+    def counted(symbol: str) -> Quote:
+        nonlocal calls
+        calls += 1
+        return original(symbol)
+
+    provider.get_quote = counted  # type: ignore[method-assign]
+    chain = ProviderChain(providers=[provider])
+
+    first = chain.get_quote("AAPL")
+    first.price = 999
+    second = chain.get_quote("AAPL")
+
+    assert calls == 1
+    assert second.price == 100
+    assert chain.source_coverage("get_quote")["cache_hit"] is True
+
+
+def test_quote_cache_can_be_disabled(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("FINANCE_QUOTE_CACHE_TTL_SECONDS", "0")
+    provider = PricedProvider("COUNTED", 100)
+    calls = 0
+    original = provider.get_quote
+
+    def counted(symbol: str) -> Quote:
+        nonlocal calls
+        calls += 1
+        return original(symbol)
+
+    provider.get_quote = counted  # type: ignore[method-assign]
+    chain = ProviderChain(providers=[provider])
+
+    chain.get_quote("AAPL")
+    chain.get_quote("AAPL")
+
+    assert calls == 2
+
+
+def test_provider_cache_covers_history_financials_and_news(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("FINANCE_HISTORY_CACHE_TTL_SECONDS", "60")
+    monkeypatch.setenv("FINANCE_FINANCIALS_CACHE_TTL_SECONDS", "60")
+    monkeypatch.setenv("FINANCE_NEWS_CACHE_TTL_SECONDS", "60")
+
+    class CacheableProvider:
+        name = "CACHEABLE"
+        news_is_symbol_scoped = True
+
+        def __init__(self) -> None:
+            self.calls = {"history": 0, "financials": 0, "news": 0}
+
+        def get_history(self, symbol: str, period: str, interval: str) -> list[Candle]:
+            self.calls["history"] += 1
+            return [Candle("2026-07-14", 100, 101, 99, 100)]
+
+        def get_financials(self, symbol: str) -> Financials:
+            self.calls["financials"] += 1
+            return Financials(symbol=symbol, source=self.name, revenue=100)
+
+        def get_news(self, symbol: str, limit: int) -> list[NewsItem]:
+            self.calls["news"] += 1
+            return [NewsItem(f"{symbol} update", source=self.name)]
+
+    provider = CacheableProvider()
+    chain = ProviderChain(providers=[provider])
+
+    chain.get_history("AAPL", "1y", "1d")
+    chain.get_history("AAPL", "1y", "1d")
+    chain.get_financials("AAPL")
+    chain.get_financials("AAPL")
+    chain.get_news("AAPL", 5)
+    chain.get_news("AAPL", 5)
+
+    assert provider.calls == {"history": 1, "financials": 1, "news": 1}
+
+
 def test_provider_operation_deadline_returns_fast_source_and_records_timeout(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -416,6 +582,31 @@ def test_tushare_does_not_mislabel_operating_cash_flow_as_free_cash_flow() -> No
     financials = provider.get_financials("600519.SS")
 
     assert financials.free_cash_flow is None
+
+
+def test_tushare_quote_keeps_price_and_reports_daily_basic_failure() -> None:
+    class QuoteClient:
+        def daily(self, **kwargs: object) -> pd.DataFrame:
+            return pd.DataFrame([
+                {"trade_date": "20260713", "close": 100, "pre_close": 99, "vol": 10},
+                {"trade_date": "20260714", "close": 101, "pre_close": 100, "vol": 20},
+            ])
+
+        def daily_basic(self, **kwargs: object) -> pd.DataFrame:
+            raise RuntimeError("daily quota exceeded")
+
+        def stock_basic(self, **kwargs: object) -> pd.DataFrame:
+            return pd.DataFrame([{"ts_code": "600519.SH", "name": "贵州茅台"}])
+
+    provider = TushareProvider(token="test-token")
+    provider._pro = QuoteClient()
+
+    quote = provider.get_quote("600519")
+
+    assert quote.price == 101
+    assert quote.market_cap is None
+    assert quote.pe_ratio is None
+    assert any("daily quota exceeded" in note for note in quote.notes)
 
 
 def test_yfinance_fallback_preserves_currency_and_report_period(monkeypatch: pytest.MonkeyPatch) -> None:

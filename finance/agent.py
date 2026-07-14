@@ -92,13 +92,13 @@ class FinanceResearchAgent:
 
         if financials.market_cap is None and quote.market_cap is not None:
             financials.market_cap = quote.market_cap
-            financials.field_sources["market_cap"] = _quote_field_source(quote)
+            financials.field_sources["market_cap"] = _quote_field_source(quote, "market_cap")
         if financials.pe_ratio is None and quote.pe_ratio is not None:
             financials.pe_ratio = quote.pe_ratio
-            financials.field_sources["pe_ratio"] = _quote_field_source(quote)
+            financials.field_sources["pe_ratio"] = _quote_field_source(quote, "pe_ratio")
         if financials.eps is None and quote.eps is not None:
             financials.eps = quote.eps
-            financials.field_sources["eps"] = _quote_field_source(quote)
+            financials.field_sources["eps"] = _quote_field_source(quote, "eps")
         if errors:
             _extend_unique(quote.notes, errors)
         report_notes = getattr(self.provider, "report_notes", None)
@@ -151,7 +151,7 @@ class FinanceResearchAgent:
             pe_ratio=quote.pe_ratio,
             eps=quote.eps,
             field_sources={
-                name: _quote_field_source(quote)
+                name: _quote_field_source(quote, name)
                 for name, value in (
                     ("market_cap", quote.market_cap),
                     ("pe_ratio", quote.pe_ratio),
@@ -482,20 +482,20 @@ class FinanceResearchAgent:
         lines = ["Prediction records (saved to scorecard):"]
         for symbol in _unique_symbols(symbols):
             try:
-                snapshot = self.snapshot(symbol, "1y")
-                quote = snapshot.quote
-                inferred_direction, inferred_confidence = _snapshot_prediction(snapshot)
+                normalized = _resolve_symbol(symbol)
+                baseline_price, baseline_as_of, source, indicators = self._prediction_inputs(normalized)
+                inferred_direction, inferred_confidence = _indicators_prediction(indicators)
                 direction = requested_direction or inferred_direction
                 confidence = requested_confidence if requested_confidence is not None else inferred_confidence
                 prediction = record_prediction(
-                    symbol=symbol,
+                    symbol=normalized,
                     direction=direction,
                     horizon_days=horizon,
                     confidence=confidence,
-                    thesis=f"{task}; indicators={snapshot.indicators.get('summary', '暂无技术摘要')}",
-                    baseline_price=quote.price,
-                    baseline_as_of=quote.as_of,
-                    source=quote.source,
+                    thesis=f"{task}; indicators={indicators.get('summary', '暂无技术摘要')}",
+                    baseline_price=baseline_price,
+                    baseline_as_of=baseline_as_of,
+                    source=source,
                 )
                 lines.append(
                     f"- {prediction.symbol} direction={prediction.direction} confidence={prediction.confidence:.2f} "
@@ -504,6 +504,26 @@ class FinanceResearchAgent:
             except Exception as exc:  # noqa: BLE001 - keep other symbols recordable
                 lines.append(f"- {symbol}: 未记录（真实基准价格不可用：{_compact_error(exc)}）")
         return "\n".join(lines)
+
+    @_with_provider_request_deadline
+    def _prediction_inputs(self, symbol: str) -> tuple[float, str, str, dict]:
+        reset_coverage = getattr(self.provider, "reset_coverage", None)
+        if callable(reset_coverage):
+            reset_coverage()
+        try:
+            history = self.provider.get_history(symbol, "1y", "1d")
+        except Exception:
+            history = []
+        latest = next((candle for candle in reversed(history) if candle.close is not None), None)
+        if latest is not None:
+            coverage = _source_coverage(self.provider).get("get_history", {})
+            source = str(coverage.get("selected_source") or getattr(self.provider, "name", "HISTORY"))
+            return float(latest.close), latest.date, source, calculate_indicators(history)
+
+        quote = self.provider.get_quote(symbol)
+        if quote.price is None:
+            raise ValueError("行情和历史价格均无可用基准价")
+        return float(quote.price), quote.as_of, quote.source or "QUOTE", calculate_indicators(history)
 
     def verify_symbol_task(self, task: str, symbol: str) -> str:
         normalized = _resolve_symbol(symbol)
@@ -650,8 +670,8 @@ def _extract_confidence(task: str) -> float | None:
     return value / 100 if value > 1 else value
 
 
-def _snapshot_prediction(snapshot: StockSnapshot) -> tuple[str, float]:
-    trend = snapshot.indicators.get("return_3m_pct")
+def _indicators_prediction(indicators: dict) -> tuple[str, float]:
+    trend = indicators.get("return_3m_pct")
     if trend is None or abs(float(trend)) < 2:
         return "neutral", 0.5
     return ("up" if trend > 0 else "down"), min(0.5 + abs(float(trend)) / 100, 0.85)
@@ -741,8 +761,10 @@ def _compact_error(exc: Exception, limit: int = 220) -> str:
     return text[:limit] + "..."
 
 
-def _quote_field_source(quote: Quote) -> str:
-    return f"{quote.source or 'UNKNOWN'} (quote, {quote.as_of or '未知时点'})"
+def _quote_field_source(quote: Quote, field_name: str) -> str:
+    source = quote.field_sources.get(field_name) or quote.source or "UNKNOWN"
+    as_of = quote.as_of if source == quote.source else ""
+    return f"{source} (quote, {as_of or '未知时点'})"
 
 
 def _verification_query(task: str, symbol: str) -> str:

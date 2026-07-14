@@ -33,6 +33,7 @@ class Quote:
     as_of: str = ""
     is_realtime: bool = False
     source_spread_pct: float | None = None
+    field_sources: dict[str, str] = field(default_factory=dict)
     notes: list[str] = field(default_factory=list)
 
 
