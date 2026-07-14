@@ -424,7 +424,6 @@ class TushareProvider:
                 import tushare as ts  # type: ignore
             except ImportError as exc:
                 raise ProviderError("tushare package is not installed") from exc
-            ts.set_token(self.token)
             self._pro = ts.pro_api(self.token, timeout=self.timeout)
         return self._pro
 
