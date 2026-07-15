@@ -90,7 +90,7 @@ def test_stock_report_quality_gate_rewrites_incomplete_final_answer() -> None:
         "## 多空证据\n事实与推断分开。",
         "## 风险\n存在数据不足风险。",
         "## 结论\n综合判断为继续核验。",
-        "详细证据说明：" + "证据" * 500,
+        "详细证据说明：" + "证据" * 800,
     ])
 
     class Backend:
@@ -138,6 +138,45 @@ def test_stock_report_quality_gate_rejects_estimated_missing_pe() -> None:
     issues = _stock_report_quality_issues("研究 AAPL 出份报告", answer)
 
     assert any("假设" in issue or "年化" in issue for issue in issues)
+
+
+def test_multi_stock_research_quality_gate_rewrites_summary() -> None:
+    complete_comparison = "\n".join([
+        "# 腾讯 00700.HK 与苹果 AAPL 对比研究报告",
+        "## 数据来源与时间\n数据来源：TEST，报告时间：2026-07-15。",
+        "## 当前行情\n00700.HK 最新价缺失；AAPL 最新价缺失。",
+        "## 估值与基本面\n两者 PE、营收和净利润均缺失。",
+        "## 技术面\n两者 MA20、RSI 和 MACD 均需验证。",
+        "## 新闻与事件\n两者公告均缺失。",
+        "## 逐标的优劣势\n00700.HK 优势与劣势均待核验；AAPL 优势与劣势均待核验。",
+        "## 横向对比\n两者数据口径需统一后再比较。",
+        "## 数据缺口与待验证项\n待验证财报、行情和新闻。",
+        "## 风险\n存在数据缺失风险。",
+        "## 结论\n综合判断为暂不做倾向性选择。",
+        "详细证据：" + "证据" * 650,
+    ])
+
+    class Backend:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def chat(self, messages, tools=None):  # noqa: ANN001, ANN201
+            self.calls += 1
+            if self.calls == 1:
+                content = "腾讯便宜但有隐忧，苹果强势但偏贵。"
+            elif self.calls == 2:
+                content = "报告已在上面输出，五项任务全部完成。"
+            else:
+                content = complete_comparison
+            return {"role": "assistant", "content": content, "tool_calls": []}
+
+    backend = Backend()
+    loop = AgentLoop(backend=backend, registry=ToolRegistry(), system_prompt="system")
+
+    answer = loop.run("研究一下 腾讯(00700.HK) 和 苹果(AAPL)")
+
+    assert backend.calls == 3
+    assert answer == complete_comparison
 
 
 def test_local_tools_work_and_enforce_safety() -> None:
@@ -847,9 +886,9 @@ def test_evaluator_workflows_reach_agent_loop(
 
     assert main([task]) == 0
     assert backend.user_tasks[0] == task
-    if "报告" in task or "备忘录" in task:
-        assert len(backend.user_tasks) == 2
-        assert "报告完成度检查" in backend.user_tasks[1]
+    if _stock_report_quality_issues(task, "model handled evaluator workflow"):
+        assert len(backend.user_tasks) >= 2
+        assert "金融研究完成度检查" in backend.user_tasks[1]
     else:
         assert backend.user_tasks == [task]
     assert "model handled evaluator workflow" in capsys.readouterr().out

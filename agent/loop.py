@@ -87,14 +87,17 @@ class AgentLoop:
     def run_messages(self, messages: list[dict[str, Any]]) -> str:
         user_task = _latest_user_task(messages)
         tool_receipts: list[dict[str, Any]] = []
-        report_revision_requested = False
+        report_revision_attempts = 0
+        synthesis_only = False
+        best_report_answer = ""
+        best_report_issues: list[str] | None = None
         for turn in range(self.max_turns):
             compacted = maybe_compact(messages, self.context_budget)
             if compacted is not messages:
                 messages[:] = compacted
                 self._emit("context_compacted", {"messages": len(messages)})
             self._emit("model_start", {"turn": turn + 1})
-            schemas = [
+            schemas = [] if synthesis_only else [
                 schema
                 for schema in self.registry.schemas()
                 if _tool_schema_name(schema) not in self.model_tool_exclusions
@@ -127,14 +130,23 @@ class AgentLoop:
                 )
                 messages[-1]["content"] = answer
                 report_issues = _stock_report_quality_issues(user_task, answer)
-                if report_issues and not report_revision_requested and turn + 1 < self.max_turns:
-                    report_revision_requested = True
+                if report_issues and (
+                    best_report_issues is None
+                    or (len(report_issues), -len(answer)) < (len(best_report_issues), -len(best_report_answer))
+                ):
+                    best_report_answer = answer
+                    best_report_issues = report_issues
+                if report_issues and report_revision_attempts < 2 and turn + 1 < self.max_turns:
+                    report_revision_attempts += 1
+                    synthesis_only = True
                     self._emit("report_quality_retry", {"issues": report_issues})
                     messages.append({
                         "role": "user",
                         "content": _report_revision_prompt(report_issues),
                     })
                     continue
+                if report_issues and best_report_answer:
+                    return best_report_answer
                 return answer
 
             for call in tool_calls:
@@ -276,17 +288,24 @@ class AgentSession:
 
 
 def _stock_report_quality_issues(user_task: str, answer: str) -> list[str]:
+    from finance.symbols import extract_symbols
+
     compact_task = re.sub(r"\s+", "", user_task.lower())
     report_requested = any(token in compact_task for token in ("报告", "备忘录", "report", "memo")) and any(
         token in compact_task for token in ("研究", "调研", "股票", "基本面", "估值", "stock")
     )
-    if not report_requested:
+    symbols = extract_symbols(user_task)
+    multi_stock_research = len(symbols) >= 2 and any(
+        token in compact_task for token in ("研究", "调研", "比较", "对比", "research", "compare")
+    )
+    if not report_requested and not multi_stock_research:
         return []
 
     clean = re.sub(r"\s+", "", answer)
     issues: list[str] = []
-    if len(clean) < 1_500:
-        issues.append("篇幅不足，需要完整研究报告而非摘要")
+    minimum_length = 1_800 if multi_stock_research else 1_500
+    if len(clean) < minimum_length:
+        issues.append("篇幅不足，需要完整研究/对比报告而非摘要")
     required_sections = (
         ("数据来源与时间", ("数据来源", "行情时间", "报告时间", "截至")),
         ("当前行情", ("当前行情", "最新价", "当前价格")),
@@ -305,6 +324,14 @@ def _stock_report_quality_issues(user_task: str, answer: str) -> list[str]:
     )
     if any(re.search(pattern, lowered_answer, flags=re.DOTALL) for pattern in unsupported_estimate_patterns):
         issues.append("存在用假设、年化或反推数字替代缺失估值/价格字段的情况")
+    if multi_stock_research:
+        for symbol in symbols:
+            if symbol.lower() not in lowered_answer:
+                issues.append(f"未在正文中逐项覆盖标的 {symbol}")
+        if not any(marker in lowered_answer for marker in ("横向对比", "对比", "比较", "两者")):
+            issues.append("缺少多标的横向对比")
+        if not any(marker in lowered_answer for marker in ("多空", "优势", "劣势", "看多", "看空")):
+            issues.append("缺少每个标的的正反证据/优劣势")
     for label, markers in required_sections:
         if not any(marker in lowered_answer for marker in markers):
             issues.append(f"缺少{label}")
@@ -313,10 +340,11 @@ def _stock_report_quality_issues(user_task: str, answer: str) -> list[str]:
 
 def _report_revision_prompt(issues: list[str]) -> str:
     return "\n".join([
-        "上一版最终答复未通过研究报告完成度检查，请重写完整报告。",
+        "上一版最终答复未通过金融研究完成度检查，请重写完整研究/对比报告。",
         "必须只使用本轮已获取的工具证据；缺失值写“缺失”，不得猜测。",
         "不得用单季 EPS 年化、假设 TTM EPS、反推价格或模型常识替代缺失的 PE、市值、现金流等字段。",
         "必须区分事实、推断、风险和待验证问题，不要只输出摘要或“全部步骤已完成”。",
+        "只有你的下一条 assistant 消息会显示在 CLI；此前草稿对用户不可见。下一条必须从标题开始完整重现全部正文，禁止说“见上文/报告已在上面输出/核心改进如下”。",
         "完成度缺项：" + "；".join(issues),
         "除非补全缺失证据确有必要，否则不要重复调用工具，直接基于现有证据输出详细 Markdown 报告。",
     ])
