@@ -1,4 +1,4 @@
-[submodule "ppt"]
-	path = ppt
-	url = https://github.com/spnotold/finance-agent-presentation
+[submodule "ppt-and-report"]
+	path = ppt-and-report
+	url = https://github.com/spnotold/ppt-and-report
 	branch = main

@@ -14,19 +14,19 @@ out-*/
 !.env.example
 
 # LaTeX / Beamer intermediate files (final PDF remains tracked)
-ppt/*.aux
-ppt/*.bbl
-ppt/*.bcf
-ppt/*.blg
-ppt/*.fdb_latexmk
-ppt/*.fls
-ppt/*.log
-ppt/*.nav
-ppt/*.out
-ppt/*.run.xml
-ppt/*.snm
-ppt/*.synctex.gz
-ppt/*.toc
-ppt/*.vrb
-ppt/*.xdv
-ppt/build/
+ppt-and-report/*.aux
+ppt-and-report/*.bbl
+ppt-and-report/*.bcf
+ppt-and-report/*.blg
+ppt-and-report/*.fdb_latexmk
+ppt-and-report/*.fls
+ppt-and-report/*.log
+ppt-and-report/*.nav
+ppt-and-report/*.out
+ppt-and-report/*.run.xml
+ppt-and-report/*.snm
+ppt-and-report/*.synctex.gz
+ppt-and-report/*.toc
+ppt-and-report/*.vrb
+ppt-and-report/*.xdv
+ppt-and-report/build/
