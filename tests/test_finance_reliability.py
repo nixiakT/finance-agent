@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import UTC, datetime, timedelta
 import sys
 import time
 from types import SimpleNamespace
@@ -16,6 +17,7 @@ from finance.data import (
     SampleDataProvider,
     TushareProvider,
     YahooFinanceProvider,
+    enrich_financial_pe,
     _news_keywords,
     _news_matches,
 )
@@ -225,6 +227,182 @@ def test_quote_cross_check_does_not_replace_primary_valuation() -> None:
     assert quote.pe_ratio == 30
     assert quote.field_sources["market_cap"] == "PRIMARY"
     assert quote.field_sources["pe_ratio"] == "PRIMARY"
+
+
+def test_yahoo_financials_reports_primary_and_fallback_failures(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class FailedResponse:
+        def raise_for_status(self) -> None:
+            raise RuntimeError("401 crumb required")
+
+    provider = YahooFinanceProvider()
+    provider.client = SimpleNamespace(get=lambda *args, **kwargs: FailedResponse())
+
+    def fail_fallback(symbol: str) -> dict[str, object]:
+        raise ProviderError("fallback returned empty info")
+
+    monkeypatch.setattr(provider, "_yfinance_info", fail_fallback)
+
+    with pytest.raises(ProviderError) as exc_info:
+        provider.get_financials("NVDA")
+
+    message = str(exc_info.value)
+    assert "quoteSummary failed" in message
+    assert "401 crumb required" in message
+    assert "yfinance fallback failed" in message
+    assert "fallback returned empty info" in message
+
+
+def test_yfinance_fallback_uses_finance_proxy_and_returns_supported_fields(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    configured: dict[str, str] = {}
+
+    def set_config(**kwargs: str) -> None:
+        configured.update(kwargs)
+
+    fake_yfinance = SimpleNamespace(
+        set_config=set_config,
+        Ticker=lambda symbol: SimpleNamespace(info={
+            "trailingPE": 42.5,
+            "trailingEps": 4.98,
+            "financialCurrency": "USD",
+        }),
+    )
+    monkeypatch.setenv("FINANCE_HTTP_PROXY", "http://127.0.0.1:7897")
+    monkeypatch.setitem(sys.modules, "yfinance", fake_yfinance)
+
+    result = YahooFinanceProvider()._yfinance_info("NVDA")
+
+    assert configured == {"proxy": "http://127.0.0.1:7897"}
+    assert result["trailingPE"] == 42.5
+    assert result["trailingEps"] == 4.98
+
+
+def test_missing_pe_is_derived_from_compatible_fresh_price_and_annual_eps() -> None:
+    report_date = (datetime.now(UTC) - timedelta(days=120)).date().isoformat()
+    quote = Quote(
+        symbol="NVDA",
+        currency="USD",
+        price=211.8,
+        source="Yahoo Finance public endpoints",
+        as_of="2026-07-14T20:00:00Z",
+        field_sources={"price": "Yahoo Finance public endpoints"},
+    )
+    financials = Financials(
+        symbol="NVDA",
+        source="AKShare",
+        as_of=report_date,
+        currency="美元",
+        period_type="ANNUAL",
+        eps=4.93,
+        field_sources={"eps": "AKShare"},
+    )
+
+    changed = enrich_financial_pe(financials, quote)
+
+    assert changed is True
+    assert financials.pe_ratio == pytest.approx(211.8 / 4.93, rel=1e-4)
+    assert financials.forward_pe is None
+    assert financials.field_sources["pe_ratio"].startswith("DERIVED:")
+    assert any("程序推导值，不是数据商直接报告的 PE" in note for note in financials.notes)
+
+
+def test_provider_chain_uses_an_already_cached_quote_for_derived_pe() -> None:
+    report_date = (datetime.now(UTC) - timedelta(days=120)).date().isoformat()
+
+    class ValuationFallbackProvider:
+        name = "REAL_PROVIDER"
+
+        def get_quote(self, symbol: str) -> Quote:
+            return Quote(
+                symbol=symbol,
+                currency="USD",
+                price=211.8,
+                source="REAL_QUOTE",
+                as_of="2026-07-14T20:00:00Z",
+            )
+
+        def get_financials(self, symbol: str) -> Financials:
+            return Financials(
+                symbol=symbol,
+                source="REAL_FINANCIALS",
+                as_of=report_date,
+                currency="USD",
+                period_type="ANNUAL",
+                eps=4.93,
+            )
+
+    chain = ProviderChain(providers=[ValuationFallbackProvider()])
+    chain.get_quote("NVDA")
+
+    financials = chain.get_financials("NVDA")
+
+    assert financials.pe_ratio == pytest.approx(211.8 / 4.93, rel=1e-4)
+    assert financials.field_sources["pe_ratio"].startswith("DERIVED:")
+    assert chain.source_coverage("get_financials")["field_sources"]["pe_ratio"].startswith("DERIVED:")
+
+
+def test_cached_financials_gain_derived_pe_after_a_quote_becomes_available() -> None:
+    report_date = (datetime.now(UTC) - timedelta(days=120)).date().isoformat()
+
+    class ValuationFallbackProvider:
+        name = "REAL_PROVIDER"
+
+        def get_quote(self, symbol: str) -> Quote:
+            return Quote(symbol=symbol, currency="USD", price=211.8, source="REAL_QUOTE")
+
+        def get_financials(self, symbol: str) -> Financials:
+            return Financials(
+                symbol=symbol,
+                source="REAL_FINANCIALS",
+                as_of=report_date,
+                currency="USD",
+                period_type="ANNUAL",
+                eps=4.93,
+            )
+
+    chain = ProviderChain(providers=[ValuationFallbackProvider()])
+    assert chain.get_financials("NVDA").pe_ratio is None
+    chain.get_quote("NVDA")
+
+    financials = chain.get_financials("NVDA")
+
+    assert financials.pe_ratio == pytest.approx(211.8 / 4.93, rel=1e-4)
+    assert chain.source_coverage("get_financials")["field_sources"]["pe_ratio"].startswith("DERIVED:")
+
+
+@pytest.mark.parametrize(
+    ("eps", "currency", "period_type", "as_of", "financial_source"),
+    [
+        (-1.0, "USD", "ANNUAL", "2026-01-25", "AKShare"),
+        (4.93, "CNY", "ANNUAL", "2026-01-25", "AKShare"),
+        (4.93, "USD", "REPORTED", "2026-01-25", "AKShare"),
+        (4.93, "USD", "ANNUAL", "2020-01-01", "AKShare"),
+        (4.93, "USD", "ANNUAL", "2026-01-25", "SAMPLE_FALLBACK"),
+    ],
+)
+def test_missing_pe_is_not_derived_from_incompatible_or_weak_evidence(
+    eps: float,
+    currency: str,
+    period_type: str,
+    as_of: str,
+    financial_source: str,
+) -> None:
+    quote = Quote(symbol="NVDA", currency="USD", price=211.8, source="Yahoo Finance public endpoints")
+    financials = Financials(
+        symbol="NVDA",
+        source=financial_source,
+        as_of=as_of,
+        currency=currency,
+        period_type=period_type,
+        eps=eps,
+    )
+
+    assert enrich_financial_pe(financials, quote) is False
+    assert financials.pe_ratio is None
+    assert "pe_ratio" not in financials.field_sources
 
 
 def test_quote_cache_reuses_results_and_returns_independent_copies(

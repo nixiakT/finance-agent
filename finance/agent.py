@@ -5,7 +5,7 @@ from functools import wraps
 import re
 
 from .backtest import backtest_moving_average_cross, format_backtest, parse_strategy
-from .data import ProviderChain, export_history_csv
+from .data import ProviderChain, enrich_financial_pe, export_history_csv
 from .debate_orchestrator import ModelDebateOrchestrator, render_debate_outcomes
 from .history_learning import (
     calibrate_momentum_signal,
@@ -105,6 +105,7 @@ class FinanceResearchAgent:
         if financials.eps is None and quote.eps is not None:
             financials.eps = quote.eps
             financials.field_sources["eps"] = _quote_field_source(quote, "eps")
+        enrich_financial_pe(financials, quote)
         if errors:
             _extend_unique(quote.notes, errors)
         report_notes = getattr(self.provider, "report_notes", None)

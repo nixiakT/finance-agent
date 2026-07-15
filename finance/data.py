@@ -21,7 +21,7 @@ from typing import Any, Protocol
 import httpx
 
 from config import load_local_env
-from .http import client as http_client
+from .http import client as http_client, proxy_url
 from .models import Candle, Financials, NewsItem, Quote, utc_now_iso
 from .symbols import CHINESE_SYMBOLS, is_a_share, normalize_symbol, to_akshare_symbol, to_tushare_symbol, to_yahoo_symbol
 
@@ -321,6 +321,7 @@ class YahooFinanceProvider:
         normalized = normalize_symbol(symbol)
         query_symbol = to_yahoo_symbol(normalized)
         modules = "summaryDetail,defaultKeyStatistics,financialData"
+        primary_error = ""
         try:
             response = self.client.get(
                 f"https://query2.finance.yahoo.com/v10/finance/quoteSummary/{query_symbol}",
@@ -329,17 +330,22 @@ class YahooFinanceProvider:
             response.raise_for_status()
             data = response.json()
             result = (((data.get("quoteSummary") or {}).get("result") or [None])[0]) or {}
-        except Exception as exc:
-            result = self._yfinance_info(query_symbol)
             if not result:
-                raise ProviderError(f"Yahoo quote summary unavailable for {query_symbol}: {exc}") from exc
-        if not result:
-            raise ProviderError("empty Yahoo quote summary")
+                raise ProviderError("empty Yahoo quote summary")
+        except Exception as exc:
+            primary_error = _compact_provider_error(exc)
+            try:
+                result = self._yfinance_info(query_symbol)
+            except Exception as fallback_exc:
+                raise ProviderError(
+                    f"Yahoo quoteSummary failed for {query_symbol}: {primary_error}; "
+                    f"yfinance fallback failed: {_compact_provider_error(fallback_exc)}"
+                ) from fallback_exc
         summary = result.get("summaryDetail") or result
         stats = result.get("defaultKeyStatistics") or result
         financial = result.get("financialData") or result
         most_recent_quarter = _raw(financial.get("mostRecentQuarter") or stats.get("mostRecentQuarter"))
-        return Financials(
+        financials = Financials(
             symbol=normalized,
             source=self.name,
             as_of=_unix_date(most_recent_quarter),
@@ -359,6 +365,18 @@ class YahooFinanceProvider:
             profit_margin=_raw(summary.get("profitMargins")),
             notes=["Yahoo quote summary fields may be incomplete for some markets."],
         )
+        if not _financials_have_data(financials):
+            detail = (
+                f" after quoteSummary failed: {primary_error}"
+                if primary_error
+                else ""
+            )
+            raise ProviderError(f"Yahoo fundamentals returned no supported fields{detail}")
+        if primary_error:
+            financials.notes.append(
+                f"Yahoo quoteSummary failed ({primary_error}); fields came from yfinance fallback."
+            )
+        return financials
 
     def get_news(self, symbol: str, limit: int = 5) -> list[NewsItem]:
         normalized = normalize_symbol(symbol)
@@ -398,15 +416,23 @@ class YahooFinanceProvider:
     def _yfinance_info(self, query_symbol: str) -> dict[str, Any]:
         try:
             import yfinance as yf  # type: ignore
-        except ImportError:
-            return {}
+        except ImportError as exc:
+            raise ProviderError("yfinance package is not installed") from exc
+        proxy = proxy_url()
+        if proxy:
+            configure = getattr(yf, "set_config", None)
+            if callable(configure):
+                try:
+                    configure(proxy=proxy)
+                except Exception as exc:
+                    raise ProviderError(f"yfinance proxy configuration failed: {exc.__class__.__name__}") from exc
         try:
             info = yf.Ticker(query_symbol).info
-        except Exception:
-            return {}
+        except Exception as exc:
+            raise ProviderError(f"yfinance info request failed: {exc}") from exc
         if not isinstance(info, dict) or not info:
-            return {}
-        return {
+            raise ProviderError("yfinance info returned an empty payload")
+        result = {
             "marketCap": info.get("marketCap") or info.get("enterpriseValue"),
             "trailingPE": info.get("trailingPE"),
             "forwardPE": info.get("forwardPE"),
@@ -422,6 +448,9 @@ class YahooFinanceProvider:
             "currency": info.get("currency"),
             "mostRecentQuarter": info.get("mostRecentQuarter"),
         }
+        if not any(value is not None and value != "" for value in result.values()):
+            raise ProviderError("yfinance info returned no supported fundamental fields")
+        return result
 
 
 class TushareProvider:
@@ -1145,6 +1174,11 @@ class ProviderChain:
         cache_key = (normalize_symbol(symbol),)
         cached = self._cache_get("get_financials", cache_key)
         if cached is not None:
+            quote = self._cache_get("get_quote", cache_key)
+            if quote is not None and enrich_financial_pe(cached, quote):
+                coverage = self._coverage.get("get_financials")
+                if coverage is not None:
+                    coverage["field_sources"] = dict(cached.field_sources)
             return cached
         operation_timeout = self._operation_timeout_or_raise("get_financials")
         successful: list[tuple[str, Financials]] = []
@@ -1204,6 +1238,9 @@ class ProviderChain:
                 _extend_unique(merged.notes, financials.notes)
             source_names = list(dict.fromkeys(name for name, _ in successful))
             merged.source = " / ".join(source_names)
+            quote = self._cache_get("get_quote", cache_key)
+            if quote is not None:
+                enrich_financial_pe(merged, quote)
             self._record_coverage(
                 "get_financials",
                 successful_real_sources=source_names,
@@ -1211,6 +1248,7 @@ class ProviderChain:
                 selected_source=merged.source,
                 sample_used=False,
                 field_differences_pct=differences,
+                field_sources=merged.field_sources,
             )
             _extend_unique(merged.notes, self.report_notes("get_financials"))
             self._cache_set("get_financials", cache_key, merged)
@@ -1671,6 +1709,81 @@ def _quote_field_compatible(primary: Quote, candidate: Quote, field_name: str) -
 
 def _financials_have_data(financials: Financials) -> bool:
     return any(getattr(financials, field_name) is not None for field_name in _FINANCIAL_FIELDS)
+
+
+def enrich_financial_pe(financials: Financials, quote: Quote) -> bool:
+    """Fill a missing PE from a reported quote value or a strictly guarded derivation."""
+    if financials.pe_ratio is not None:
+        return False
+    if normalize_symbol(financials.symbol) != normalize_symbol(quote.symbol):
+        return False
+    if quote.pe_ratio is not None and float(quote.pe_ratio) > 0:
+        financials.pe_ratio = float(quote.pe_ratio)
+        financials.field_sources["pe_ratio"] = (
+            quote.field_sources.get("pe_ratio") or quote.source or "UNKNOWN_QUOTE_SOURCE"
+        )
+        return True
+
+    price = _to_float(quote.price)
+    eps = _to_float(financials.eps)
+    if price is None or price <= 0 or eps is None or eps <= 0:
+        return False
+    if _unsafe_derivation_source(quote.source) or _unsafe_derivation_source(financials.source):
+        return False
+    quote_currency = _canonical_currency(quote.currency)
+    financial_currency = _canonical_currency(financials.currency)
+    if not quote_currency or quote_currency != financial_currency:
+        return False
+    period_type = str(financials.period_type or "").strip().upper()
+    if period_type not in {"TTM", "ANNUAL"}:
+        return False
+    age_days = _financial_age_days(financials.as_of)
+    if age_days is None or not 0 <= age_days <= 550:
+        return False
+
+    estimate = price / eps
+    price_source = quote.field_sources.get("price") or quote.source or "UNKNOWN_QUOTE_SOURCE"
+    eps_source = financials.field_sources.get("eps") or financials.source or "UNKNOWN_FINANCIAL_SOURCE"
+    financials.pe_ratio = round(estimate, 4)
+    financials.field_sources["pe_ratio"] = (
+        f"DERIVED: {price_source} price / {eps_source} {period_type} EPS"
+    )
+    financials.notes.append(
+        f"估算 PE {estimate:.2f} = 当前价格 {price:g}（{price_source}，{quote.as_of or '未知时点'}）"
+        f" ÷ {period_type} EPS {eps:g}（{eps_source}，报告期 {financials.as_of}）；"
+        "程序推导值，不是数据商直接报告的 PE。"
+    )
+    return True
+
+
+def _unsafe_derivation_source(source: str) -> bool:
+    upper = str(source or "").upper()
+    return any(token in upper for token in ("SAMPLE_FALLBACK", "UNAVAILABLE", "SKIPPED"))
+
+
+def _canonical_currency(value: str) -> str:
+    compact = str(value or "").strip().upper().replace(" ", "")
+    aliases = {
+        "USD": "USD",
+        "US$": "USD",
+        "美元": "USD",
+        "CNY": "CNY",
+        "RMB": "CNY",
+        "人民币": "CNY",
+        "人民币元": "CNY",
+        "HKD": "HKD",
+        "港元": "HKD",
+        "港币": "HKD",
+    }
+    return aliases.get(compact, compact if len(compact) == 3 and compact.isalpha() else "")
+
+
+def _financial_age_days(value: str) -> int | None:
+    try:
+        report_date = datetime.fromisoformat(str(value).strip()[:10]).date()
+    except (TypeError, ValueError):
+        return None
+    return (datetime.now(UTC).date() - report_date).days
 
 
 def _financial_field_differences(financials: list[tuple[str, Financials]]) -> dict[str, float]:
