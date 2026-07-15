@@ -87,6 +87,7 @@ class AgentLoop:
     def run_messages(self, messages: list[dict[str, Any]]) -> str:
         user_task = _latest_user_task(messages)
         tool_receipts: list[dict[str, Any]] = []
+        report_revision_requested = False
         for turn in range(self.max_turns):
             compacted = maybe_compact(messages, self.context_budget)
             if compacted is not messages:
@@ -125,6 +126,15 @@ class AgentLoop:
                     tool_receipts,
                 )
                 messages[-1]["content"] = answer
+                report_issues = _stock_report_quality_issues(user_task, answer)
+                if report_issues and not report_revision_requested and turn + 1 < self.max_turns:
+                    report_revision_requested = True
+                    self._emit("report_quality_retry", {"issues": report_issues})
+                    messages.append({
+                        "role": "user",
+                        "content": _report_revision_prompt(report_issues),
+                    })
+                    continue
                 return answer
 
             for call in tool_calls:
@@ -263,6 +273,53 @@ class AgentSession:
             system,
             *recent_complete_turns(self.messages[1:], self.max_history_messages),
         ]
+
+
+def _stock_report_quality_issues(user_task: str, answer: str) -> list[str]:
+    compact_task = re.sub(r"\s+", "", user_task.lower())
+    report_requested = any(token in compact_task for token in ("报告", "备忘录", "report", "memo")) and any(
+        token in compact_task for token in ("研究", "调研", "股票", "基本面", "估值", "stock")
+    )
+    if not report_requested:
+        return []
+
+    clean = re.sub(r"\s+", "", answer)
+    issues: list[str] = []
+    if len(clean) < 1_500:
+        issues.append("篇幅不足，需要完整研究报告而非摘要")
+    required_sections = (
+        ("数据来源与时间", ("数据来源", "行情时间", "报告时间", "截至")),
+        ("当前行情", ("当前行情", "最新价", "当前价格")),
+        ("估值与基本面", ("基本面", "营收", "净利润", "pe")),
+        ("技术面", ("技术面", "macd", "rsi", "ma20")),
+        ("新闻与事件", ("新闻", "事件", "公告")),
+        ("数据缺口与待验证项", ("缺失", "数据缺口", "待验证")),
+        ("风险", ("风险",)),
+        ("结论", ("结论", "综合判断")),
+    )
+    lowered_answer = answer.lower()
+    unsupported_estimate_patterns = (
+        r"(?:pe|市盈率).{0,50}(?:推算|年化|假设|反推)",
+        r"(?:推算|年化|假设|反推).{0,50}(?:pe|市盈率)",
+        r"(?:起始价|市值|ttm\s*eps).{0,40}反推",
+    )
+    if any(re.search(pattern, lowered_answer, flags=re.DOTALL) for pattern in unsupported_estimate_patterns):
+        issues.append("存在用假设、年化或反推数字替代缺失估值/价格字段的情况")
+    for label, markers in required_sections:
+        if not any(marker in lowered_answer for marker in markers):
+            issues.append(f"缺少{label}")
+    return issues
+
+
+def _report_revision_prompt(issues: list[str]) -> str:
+    return "\n".join([
+        "上一版最终答复未通过研究报告完成度检查，请重写完整报告。",
+        "必须只使用本轮已获取的工具证据；缺失值写“缺失”，不得猜测。",
+        "不得用单季 EPS 年化、假设 TTM EPS、反推价格或模型常识替代缺失的 PE、市值、现金流等字段。",
+        "必须区分事实、推断、风险和待验证问题，不要只输出摘要或“全部步骤已完成”。",
+        "完成度缺项：" + "；".join(issues),
+        "除非补全缺失证据确有必要，否则不要重复调用工具，直接基于现有证据输出详细 Markdown 报告。",
+    ])
 
 
 def _preview(text: str, limit: int = 180) -> str:

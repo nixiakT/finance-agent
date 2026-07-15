@@ -8,7 +8,7 @@ import pytest
 from agent.cli import TracePrinter, _should_route_finance, main
 from agent.commands import CommandRouter
 from agent.context import maybe_compact, truncate_observation
-from agent.loop import AgentLoop, AgentSession, ModelCallError, _tool_preview
+from agent.loop import AgentLoop, AgentSession, ModelCallError, _stock_report_quality_issues, _tool_preview
 from agent.ui import render_trace
 from finance.data import ProviderError
 from finance.evolution import add_memory, extract_learning, list_memories
@@ -76,6 +76,68 @@ def test_agent_loop_surfaces_tool_error_as_observation() -> None:
     answer = loop.run("run failing tool")
 
     assert "工具 fail_tool 执行失败：boom" in answer
+
+
+def test_stock_report_quality_gate_rewrites_incomplete_final_answer() -> None:
+    complete_report = "\n".join([
+        "# 股票研究报告",
+        "## 数据来源与时间\n数据来源：TEST，报告时间：2026-07-15。",
+        "## 当前行情\n最新价：100。",
+        "## 估值与基本面\nPE：缺失；营收：缺失；净利润：缺失。",
+        "## 技术面\nMA20、RSI 和 MACD 均需核验。",
+        "## 新闻与事件\n公告数据缺失。",
+        "## 数据缺口与待验证项\n待验证财报。",
+        "## 多空证据\n事实与推断分开。",
+        "## 风险\n存在数据不足风险。",
+        "## 结论\n综合判断为继续核验。",
+        "详细证据说明：" + "证据" * 500,
+    ])
+
+    class Backend:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def chat(self, messages, tools=None):  # noqa: ANN001, ANN201
+            self.calls += 1
+            content = "全部步骤已完成，茅台值得关注。" if self.calls == 1 else complete_report
+            return {"role": "assistant", "content": content, "tool_calls": []}
+
+    backend = Backend()
+    loop = AgentLoop(backend=backend, registry=ToolRegistry(), system_prompt="system")
+
+    answer = loop.run("研究一下贵州茅台600519，出份报告")
+
+    assert backend.calls == 2
+    assert answer == complete_report
+
+
+def test_stock_report_quality_gate_does_not_expand_regular_answers() -> None:
+    backend = RecordingBackend("当前价格是 100。")
+    loop = AgentLoop(backend=backend, registry=ToolRegistry(), system_prompt="system")
+
+    answer = loop.run("查一下 AAPL 价格")
+
+    assert answer == "当前价格是 100。"
+    assert len(backend.user_tasks) == 1
+
+
+def test_stock_report_quality_gate_rejects_estimated_missing_pe() -> None:
+    answer = "\n".join([
+        "# 股票研究报告",
+        "数据来源与报告时间：TEST 2026-07-15",
+        "当前行情：最新价 100",
+        "基本面：营收和净利润缺失，PE 源字段缺失，但单季 EPS 年化推算 PE 约 14 倍。",
+        "技术面：MA20、RSI、MACD 缺失。",
+        "新闻与事件：公告缺失。",
+        "数据缺口与待验证项：待验证财报。",
+        "风险：数据缺失。",
+        "结论：继续核验。",
+        "证据" * 700,
+    ])
+
+    issues = _stock_report_quality_issues("研究 AAPL 出份报告", answer)
+
+    assert any("假设" in issue or "年化" in issue for issue in issues)
 
 
 def test_local_tools_work_and_enforce_safety() -> None:
@@ -784,7 +846,12 @@ def test_evaluator_workflows_reach_agent_loop(
     )
 
     assert main([task]) == 0
-    assert backend.user_tasks == [task]
+    assert backend.user_tasks[0] == task
+    if "报告" in task or "备忘录" in task:
+        assert len(backend.user_tasks) == 2
+        assert "报告完成度检查" in backend.user_tasks[1]
+    else:
+        assert backend.user_tasks == [task]
     assert "model handled evaluator workflow" in capsys.readouterr().out
 
 

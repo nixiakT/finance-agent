@@ -477,7 +477,14 @@ def test_route_task_learns_from_history(tmp_path, monkeypatch: pytest.MonkeyPatc
 
 
 def test_debate_includes_berkshire_style_roles() -> None:
-    agent = FinanceResearchAgent(provider=ProviderChain(providers=[StaticProvider()]))
+    class OfflineBackend:
+        def chat(self, messages, tools=None, temperature=0.0):  # noqa: ANN001, ANN201
+            raise RuntimeError("offline test uses deterministic debate fallback")
+
+    agent = FinanceResearchAgent(
+        provider=ProviderChain(providers=[StaticProvider()]),
+        debate_backend=OfflineBackend(),
+    )
 
     output = agent.debate_stocks(["AAPL"])
 
