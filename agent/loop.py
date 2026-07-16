@@ -436,7 +436,16 @@ def _progress_checkpoint_prompt(pending_tools: set[str], user_task: str) -> str:
 
 def _planned_tool_names(items: object, available_names: Iterable[str]) -> set[str]:
     text = json.dumps(items, ensure_ascii=False) if items is not None else ""
-    return {name for name in available_names if name and name in text}
+    planned: set[str] = set()
+    for name in available_names:
+        if not name:
+            continue
+        aliases = {name}
+        if name.startswith("mcp__") and "__" in name[5:]:
+            aliases.add(name.split("__", 2)[-1])
+        if any(alias in text for alias in aliases):
+            planned.add(name)
+    return planned
 
 
 def _stock_report_quality_issues(user_task: str, answer: str) -> list[str]:
@@ -608,6 +617,11 @@ def _enforce_task_boundaries(
                 f"预测记录边界：本轮仍有 {len(missing)} 个标的没有成功的 "
                 f"prediction_record 回执（{', '.join(missing)}），不能算作已写入评分表。"
             )
+    if _has_successful_tool(tool_receipts, "mcp__finance__risk_budget"):
+        compact_bounded = "".join(bounded.lower().replace(",", "").split())
+        no_order_markers = ("未产生订单", "未下单", "没有下单", "未执行交易", "noorder")
+        if not any(marker in compact_bounded for marker in no_order_markers):
+            notices.append("风险预算边界：本轮只做研究计算，未产生订单。")
     if not notices:
         return bounded
     return bounded.rstrip() + "\n\n" + "\n".join(notices)

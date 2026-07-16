@@ -349,6 +349,23 @@ def test_negated_prediction_recording_request_does_not_add_scorecard_notice() ->
     assert "预测记录边界" not in answer
 
 
+def test_risk_budget_receipt_preserves_no_order_boundary() -> None:
+    registry = ToolRegistry()
+    registry.register(Tool(
+        name="mcp__finance__risk_budget",
+        description="deterministic risk budget",
+        parameters={"type": "object", "properties": {}},
+        run=lambda: '{"max_shares": 125, "position_value": 12500}',
+    ))
+    backend = MultiToolThenAnswerBackend([
+        {"name": "mcp__finance__risk_budget", "arguments": {}},
+    ], answer="风险预算计算完成。")
+
+    answer = AgentLoop(backend, registry, SYSTEM_PROMPT).run("计算研究用途风险预算")
+
+    assert "未产生订单" in answer
+
+
 def test_explicit_paper_trade_does_not_get_real_order_notice() -> None:
     loop = AgentLoop(CapturingBackend(summary="unused", answer="已记录纸面持仓"), ToolRegistry(), SYSTEM_PROMPT)
 

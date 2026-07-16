@@ -9,7 +9,14 @@ import pytest
 from agent.cli import TracePrinter, _should_route_finance, main
 from agent.commands import CommandRouter
 from agent.context import maybe_compact, truncate_observation
-from agent.loop import AgentLoop, AgentSession, ModelCallError, _stock_report_quality_issues, _tool_preview
+from agent.loop import (
+    AgentLoop,
+    AgentSession,
+    ModelCallError,
+    _planned_tool_names,
+    _stock_report_quality_issues,
+    _tool_preview,
+)
 from agent.ui import render_trace
 from finance.data import ProviderError
 from finance.evolution import add_memory, extract_learning, list_memories
@@ -213,6 +220,15 @@ def test_agent_loop_reserves_last_turn_for_final_synthesis() -> None:
     answer = AgentLoop(Backend(), registry, "system", max_turns=2).run("finish")
 
     assert answer == "final answer"
+
+
+def test_planned_tool_names_matches_mcp_short_name() -> None:
+    planned = _planned_tool_names(
+        [{"desc": "调用 risk_budget 完成风险预算"}],
+        ["read", "mcp__finance__risk_budget"],
+    )
+
+    assert planned == {"mcp__finance__risk_budget"}
 
 
 def test_task_list_update_merges_and_complete_empties_store(
