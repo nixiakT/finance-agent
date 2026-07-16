@@ -14,6 +14,7 @@ from agent.loop import (
     AgentSession,
     ModelCallError,
     _planned_tool_names,
+    _required_tools_for_task,
     _stock_report_quality_issues,
     _tool_preview,
 )
@@ -231,6 +232,56 @@ def test_planned_tool_names_matches_mcp_short_name() -> None:
     assert planned == {"mcp__finance__risk_budget"}
 
 
+def test_required_tools_detects_deterministic_risk_budget_intent() -> None:
+    required = _required_tools_for_task(
+        "按本金 100000、风险 1%、入场价 100、止损价 92 计算仓位",
+        ["read", "mcp__finance__risk_budget"],
+    )
+
+    assert required == {"mcp__finance__risk_budget"}
+
+
+def test_agent_loop_requires_risk_budget_tool_before_accepting_answer() -> None:
+    class Backend:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def chat(self, messages, tools=None):  # noqa: ANN001, ANN201
+            self.calls += 1
+            if self.calls == 1:
+                return {"role": "assistant", "content": "手算结果", "tool_calls": []}
+            if self.calls == 2:
+                names = {(schema.get("function") or {}).get("name") for schema in (tools or [])}
+                assert names == {"mcp__finance__risk_budget"}
+                return {
+                    "role": "assistant",
+                    "content": "",
+                    "tool_calls": [{
+                        "id": "risk",
+                        "name": "mcp__finance__risk_budget",
+                        "arguments": {},
+                    }],
+                }
+            return {"role": "assistant", "content": "工具证据结果", "tool_calls": []}
+
+    registry = ToolRegistry()
+    registry.register(Tool(
+        "mcp__finance__risk_budget",
+        "risk budget",
+        {"type": "object", "properties": {}},
+        lambda: '{"max_shares": 125}',
+    ))
+    backend = Backend()
+
+    answer = AgentLoop(backend, registry, "system", max_turns=4).run(
+        "本金 100000，风险 1%，入场价 100，止损价 92"
+    )
+
+    assert "工具证据结果" in answer
+    assert "未产生订单" in answer
+    assert backend.calls == 3
+
+
 def test_task_list_update_merges_and_complete_empties_store(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -278,7 +329,7 @@ def test_agent_loop_checkpoints_todo_and_prioritizes_planned_tool(
                         ]},
                     }],
                 }
-            if 2 <= self.calls <= 5:
+            if 2 <= self.calls <= 3:
                 return {
                     "role": "assistant",
                     "content": "",
@@ -288,7 +339,7 @@ def test_agent_loop_checkpoints_todo_and_prioritizes_planned_tool(
                         "arguments": {"query": self.calls},
                     }],
                 }
-            if self.calls == 6:
+            if self.calls == 4:
                 assert names == {"task_list", "planned_probe"}
                 assert "PLAN_PROGRESS_CHECKPOINT" in messages[-1]["content"]
                 return {
@@ -320,7 +371,7 @@ def test_agent_loop_checkpoints_todo_and_prioritizes_planned_tool(
         lambda: "planned result",
     ))
 
-    answer = AgentLoop(Backend(), registry, "system", max_turns=8).run("long task")
+    answer = AgentLoop(Backend(), registry, "system", max_turns=6).run("long task")
 
     assert answer == "finished"
     assert (tmp_path / "todo.jsonl").read_text(encoding="utf-8") == ""

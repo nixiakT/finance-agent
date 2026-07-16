@@ -99,7 +99,7 @@ class AgentLoop:
         todo_seen = False
         todo_open = False
         turns_since_todo = 0
-        planned_tool_names: set[str] = set()
+        planned_tool_names = _required_tools_for_task(user_task, self.registry.names())
         completed_tool_names: set[str] = set()
         deferred_answer = ""
         for turn in range(self.max_turns):
@@ -109,9 +109,11 @@ class AgentLoop:
                 self._emit("context_compacted", {"messages": len(messages)})
             pending_planned_tools = planned_tool_names - completed_tool_names
             progress_checkpoint = (
-                todo_open
-                and turns_since_todo >= 4
-                and not synthesis_only
+                not synthesis_only
+                and (
+                    (todo_open and turns_since_todo >= 4)
+                    or (pending_planned_tools and turns_since_todo >= 2)
+                )
             )
             if progress_checkpoint:
                 messages.append({
@@ -125,6 +127,7 @@ class AgentLoop:
             if (
                 turn == self.max_turns - 1
                 and tool_receipts
+                and not pending_planned_tools
                 and not synthesis_only
                 and not final_synthesis_requested
             ):
@@ -165,8 +168,12 @@ class AgentLoop:
 
             tool_calls = assistant.get("tool_calls") or []
             if not tool_calls:
-                if todo_open and turn + 1 < self.max_turns:
-                    deferred_answer = str(assistant.get("content") or "").strip()
+                if (todo_open or pending_planned_tools) and turn + 1 < self.max_turns:
+                    deferred_answer = (
+                        str(assistant.get("content") or "").strip()
+                        if todo_open and not pending_planned_tools
+                        else ""
+                    )
                     messages.append({
                         "role": "user",
                         "content": _progress_checkpoint_prompt(pending_planned_tools, user_task),
@@ -314,7 +321,7 @@ class AgentLoop:
                 no_progress_rounds = 0
             else:
                 no_progress_rounds += 1
-                if no_progress_rounds >= 2:
+                if no_progress_rounds >= 2 and not (planned_tool_names - completed_tool_names):
                     messages.append({
                         "role": "user",
                         "content": _convergence_prompt(no_progress_rounds),
@@ -446,6 +453,18 @@ def _planned_tool_names(items: object, available_names: Iterable[str]) -> set[st
         if any(alias in text for alias in aliases):
             planned.add(name)
     return planned
+
+
+def _required_tools_for_task(user_task: str, available_names: Iterable[str]) -> set[str]:
+    available = set(available_names)
+    compact = "".join(str(user_task).lower().split())
+    risk_cues = (
+        all(token in compact for token in ("本金", "风险", "入场", "止损")),
+        all(token in compact for token in ("capital", "risk", "entry", "stop")),
+    )
+    if any(risk_cues) and "mcp__finance__risk_budget" in available:
+        return {"mcp__finance__risk_budget"}
+    return set()
 
 
 def _stock_report_quality_issues(user_task: str, answer: str) -> list[str]:
