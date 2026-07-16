@@ -88,6 +88,7 @@ def _task_list(action: str, items: list | None = None) -> str:
         if not items:
             raise ValueError("items 不能为空")
         current = [_normalize_task(item, index) for index, item in enumerate(items, start=1)]
+        current = _active_tasks(current)
         _save_tasks(store, current)
         return _render_tasks("任务清单已建立", current)
     if normalized == "update":
@@ -98,7 +99,7 @@ def _task_list(action: str, items: list | None = None) -> str:
             incoming = _normalize_task(raw, index)
             previous = by_id.get(incoming["id"], {})
             by_id[incoming["id"]] = {**previous, **incoming}
-        current = list(by_id.values())
+        current = _active_tasks(list(by_id.values()))
         _save_tasks(store, current)
         return _render_tasks("任务清单已更新", current)
     if normalized in {"complete", "done"}:
@@ -205,6 +206,10 @@ def _save_tasks(path: Path, tasks: list[dict[str, str]]) -> None:
         "\n".join(json.dumps(item, ensure_ascii=False, sort_keys=True) for item in tasks),
         encoding="utf-8",
     )
+
+
+def _active_tasks(tasks: list[dict[str, str]]) -> list[dict[str, str]]:
+    return [item for item in tasks if item.get("status") not in {"completed", "complete", "done"}]
 
 
 def _normalize_task(raw: object, index: int) -> dict[str, str]:

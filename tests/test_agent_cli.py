@@ -222,7 +222,7 @@ def test_task_list_update_merges_and_complete_empties_store(
     _task_list("add", [{"id": "1", "desc": "first"}, {"id": "2", "desc": "second"}])
     updated = _task_list("update", [{"id": "1", "desc": "first", "status": "completed"}])
 
-    assert "1: first" in updated
+    assert "1: first" not in updated
     assert "2: second" in updated
     assert _task_list("complete", [{"id": "1"}]).count("second") == 1
     assert "计划已全部完成" in _task_list("complete", ["2"])
@@ -303,6 +303,52 @@ def test_agent_loop_checkpoints_todo_and_prioritizes_planned_tool(
 
     assert answer == "finished"
     assert (tmp_path / "todo.jsonl").read_text(encoding="utf-8") == ""
+
+
+def test_agent_loop_returns_deferred_answer_after_todo_is_cleared(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import tools.more_tools as more_tools
+
+    monkeypatch.setattr(more_tools, "_task_store", lambda: tmp_path / "todo.jsonl")
+
+    class Backend:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def chat(self, messages, tools=None):  # noqa: ANN001, ANN201
+            self.calls += 1
+            if self.calls == 1:
+                return {
+                    "role": "assistant",
+                    "content": "",
+                    "tool_calls": [{
+                        "id": "plan",
+                        "name": "task_list",
+                        "arguments": {"action": "add", "items": [{"id": "1", "desc": "finish"}]},
+                    }],
+                }
+            if self.calls == 2:
+                return {"role": "assistant", "content": "complete report", "tool_calls": []}
+            return {
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [{
+                    "id": "complete",
+                    "name": "task_list",
+                    "arguments": {"action": "complete", "items": ["1"]},
+                }],
+            }
+
+    registry = ToolRegistry()
+    registry.register(task_list_tool)
+    backend = Backend()
+
+    answer = AgentLoop(backend, registry, "system", max_turns=5).run("long task")
+
+    assert answer == "complete report"
+    assert backend.calls == 3
 
 
 def test_stock_report_quality_gate_rewrites_incomplete_final_answer() -> None:

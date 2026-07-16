@@ -101,6 +101,7 @@ class AgentLoop:
         turns_since_todo = 0
         planned_tool_names: set[str] = set()
         completed_tool_names: set[str] = set()
+        deferred_answer = ""
         for turn in range(self.max_turns):
             compacted = maybe_compact(messages, self.context_budget)
             if compacted is not messages:
@@ -115,7 +116,7 @@ class AgentLoop:
             if progress_checkpoint:
                 messages.append({
                     "role": "user",
-                    "content": _progress_checkpoint_prompt(pending_planned_tools),
+                    "content": _progress_checkpoint_prompt(pending_planned_tools, user_task),
                 })
                 self._emit("progress_checkpoint", {
                     "pending_planned_tools": sorted(pending_planned_tools),
@@ -165,9 +166,10 @@ class AgentLoop:
             tool_calls = assistant.get("tool_calls") or []
             if not tool_calls:
                 if todo_open and turn + 1 < self.max_turns:
+                    deferred_answer = str(assistant.get("content") or "").strip()
                     messages.append({
                         "role": "user",
-                        "content": _progress_checkpoint_prompt(pending_planned_tools),
+                        "content": _progress_checkpoint_prompt(pending_planned_tools, user_task),
                     })
                     turns_since_todo = 4
                     continue
@@ -286,7 +288,7 @@ class AgentLoop:
                     turns_since_todo = 0
                     action = str(arguments.get("action") or "").lower().strip()
                     if action in {"add", "set", "update"}:
-                        todo_open = True
+                        todo_open = "计划已全部完成" not in receipt_output
                         planned_tool_names.update(
                             _planned_tool_names(arguments.get("items"), self.registry.names())
                         )
@@ -305,6 +307,8 @@ class AgentLoop:
 
             if todo_seen and not any(call.get("name") == "task_list" for call in tool_calls):
                 turns_since_todo += 1
+            if deferred_answer and not todo_open:
+                return _enforce_task_boundaries(user_task, deferred_answer, tool_receipts)
 
             if turn_made_progress:
                 no_progress_rounds = 0
@@ -415,13 +419,17 @@ def _final_synthesis_prompt() -> str:
     )
 
 
-def _progress_checkpoint_prompt(pending_tools: set[str]) -> str:
+def _progress_checkpoint_prompt(pending_tools: set[str], user_task: str) -> str:
     pending = ", ".join(sorted(pending_tools)) or "无"
+    original = _preview(redact_sensitive_text(user_task), 1200)
     return (
         "[PLAN_PROGRESS_CHECKPOINT] Stop broad searching and reconcile the Todo plan now. "
         "Call task_list with action=complete for every finished item, using its id. "
         f"Planned tools not yet successfully executed: {pending}. "
         "If any are listed, execute them now before more source exploration. "
+        "For tool arguments, use the exact values in the original user request; never substitute "
+        "numbers from examples, Skill text, or tool observations. "
+        f"Original user request: {original} "
         "Do not produce the final answer until the Todo list is empty."
     )
 
