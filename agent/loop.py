@@ -12,6 +12,7 @@
 工具结果会被截断，长会话会按预算压缩，避免把上下文撑爆。
 """
 from __future__ import annotations
+import json
 import re
 from pathlib import Path
 from typing import Any, Callable, Iterable
@@ -91,11 +92,25 @@ class AgentLoop:
         synthesis_only = False
         best_report_answer = ""
         best_report_issues: list[str] | None = None
+        call_cache: dict[str, tuple[str, str, bool]] = {}
+        seen_calls: set[str] = set()
+        no_progress_rounds = 0
+        final_synthesis_requested = False
         for turn in range(self.max_turns):
             compacted = maybe_compact(messages, self.context_budget)
             if compacted is not messages:
                 messages[:] = compacted
                 self._emit("context_compacted", {"messages": len(messages)})
+            if (
+                turn == self.max_turns - 1
+                and tool_receipts
+                and not synthesis_only
+                and not final_synthesis_requested
+            ):
+                synthesis_only = True
+                final_synthesis_requested = True
+                messages.append({"role": "user", "content": _final_synthesis_prompt()})
+                self._emit("convergence_requested", {"reason": "final_turn_reserved"})
             self._emit("model_start", {"turn": turn + 1})
             schemas = [] if synthesis_only else [
                 schema
@@ -149,13 +164,30 @@ class AgentLoop:
                     return best_report_answer
                 return answer
 
+            turn_made_progress = False
             for call in tool_calls:
                 name = call["name"]
                 arguments = call.get("arguments", {})
+                fingerprint = _tool_call_fingerprint(name, arguments)
+                repeated_call = fingerprint in seen_calls
+                seen_calls.add(fingerprint)
                 succeeded = False
                 receipt_output = ""
                 if name not in allowed_tool_names:
-                    obs = f"错误：工具 {name} 未向当前模型公开"
+                    available = ", ".join(sorted(allowed_tool_names)) or "无（请直接完成答案）"
+                    obs = (
+                        f"错误：工具 {name} 未向当前模型公开。"
+                        f"当前可用工具仅有：{available}。"
+                        "不要重复该调用；改用已公开工具，或基于已有证据完成答案。"
+                    )
+                elif fingerprint in call_cache and name != "task_list":
+                    receipt_output, previous_obs, succeeded = call_cache[fingerprint]
+                    obs = (
+                        previous_obs
+                        + "\n[无进展保护] 相同工具与参数已经执行过，已复用先前结果；"
+                        "请推进下一步，不要再次重复调用。"
+                    )
+                    self._emit("tool_reused", {"name": name, "arguments": arguments})
                 elif name in PAPER_PORTFOLIO_MUTATIONS and _is_real_trade_request(user_task):
                     obs = (
                         "[交易边界] 拒绝：用户要求的是真实交易，且未明确指定模拟/纸面交易；"
@@ -210,6 +242,10 @@ class AgentLoop:
                                     "name": name,
                                     "error": str(exc),
                                 })
+                if name in allowed_tool_names and name != "task_list" and fingerprint not in call_cache:
+                    call_cache[fingerprint] = (receipt_output, obs, succeeded)
+                if name in allowed_tool_names and not repeated_call:
+                    turn_made_progress = True
                 tool_receipts.append({
                     "name": name,
                     "arguments": arguments,
@@ -218,6 +254,21 @@ class AgentLoop:
                 })
                 messages.append({"role": "tool", "name": name,
                                  "tool_call_id": call.get("id"), "content": obs})
+
+            if turn_made_progress:
+                no_progress_rounds = 0
+            else:
+                no_progress_rounds += 1
+                if no_progress_rounds >= 2:
+                    messages.append({
+                        "role": "user",
+                        "content": _convergence_prompt(no_progress_rounds),
+                    })
+                    self._emit("convergence_requested", {
+                        "reason": "no_progress",
+                        "rounds": no_progress_rounds,
+                    })
+                    synthesis_only = True
 
         return "[达到最大轮数上限，未完成任务]"
 
@@ -285,6 +336,32 @@ class AgentSession:
             system,
             *recent_complete_turns(self.messages[1:], self.max_history_messages),
         ]
+
+
+def _tool_call_fingerprint(name: str, arguments: dict[str, Any]) -> str:
+    try:
+        encoded = json.dumps(arguments, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    except (TypeError, ValueError):
+        encoded = repr(arguments)
+    return f"{name}:{encoded}"
+
+
+def _convergence_prompt(rounds: int) -> str:
+    return (
+        f"[AGENT_NO_PROGRESS round={rounds}] The preceding tool turn made no new progress. "
+        "Do not repeat an unavailable tool or the same tool with the same arguments. "
+        "Use a different available tool only if a specific required fact is still missing; "
+        "otherwise complete pending Todo items and produce the final evidence-backed answer now."
+    )
+
+
+def _final_synthesis_prompt() -> str:
+    return (
+        "[FINAL_SYNTHESIS_REQUIRED] This is the reserved final model turn. "
+        "No more tools are available. Using only evidence already collected, produce the complete "
+        "final answer now. State any unresolved item honestly, include required code paths and "
+        "safety boundaries, and do not request or describe another tool call."
+    )
 
 
 def _stock_report_quality_issues(user_task: str, answer: str) -> list[str]:

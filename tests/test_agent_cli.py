@@ -40,6 +40,39 @@ def test_maybe_compact_preserves_system_and_recent_messages() -> None:
     assert len(compacted) < len(messages)
 
 
+def test_maybe_compact_handles_one_long_assistant_tool_loop() -> None:
+    messages: list[dict[str, Any]] = [
+        {"role": "system", "content": "system"},
+        {"role": "user", "content": "one long autonomous task"},
+    ]
+    for index in range(7):
+        messages.extend([
+            {
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [{"id": f"call-{index}", "name": "read", "arguments": {}}],
+            },
+            {
+                "role": "tool",
+                "name": "read",
+                "tool_call_id": f"call-{index}",
+                "content": f"result-{index}-" + "x" * 800,
+            },
+        ])
+
+    compacted = maybe_compact(messages, budget=100)
+
+    assert compacted[0] == messages[0]
+    assert compacted[1] == messages[1]
+    assert compacted[2]["role"] == "assistant"
+    assert "Earlier conversation was compacted" in compacted[2]["content"]
+    assert len(compacted) < len(messages)
+    recent = compacted[3:]
+    assert [message["role"] for message in recent] == ["assistant", "tool"] * 3
+    for assistant, tool in zip(recent[::2], recent[1::2]):
+        assert assistant["tool_calls"][0]["id"] == tool["tool_call_id"]
+
+
 def test_agent_loop_truncates_tool_results() -> None:
     registry = ToolRegistry()
     registry.register(Tool(
@@ -76,6 +109,104 @@ def test_agent_loop_surfaces_tool_error_as_observation() -> None:
     answer = loop.run("run failing tool")
 
     assert "工具 fail_tool 执行失败：boom" in answer
+
+
+def test_agent_loop_reuses_identical_tool_call_and_requests_progress() -> None:
+    calls = 0
+    payloads: list[list[dict[str, Any]]] = []
+
+    class Backend:
+        def chat(self, messages, tools=None):  # noqa: ANN001, ANN201
+            payloads.append(list(messages))
+            if len(payloads) <= 3:
+                return {
+                    "role": "assistant",
+                    "content": "",
+                    "tool_calls": [{"id": f"call-{len(payloads)}", "name": "probe", "arguments": {"x": 1}}],
+                }
+            return {"role": "assistant", "content": "finished", "tool_calls": []}
+
+    def run_probe(x: int) -> str:
+        nonlocal calls
+        calls += 1
+        return f"value={x}"
+
+    registry = ToolRegistry()
+    registry.register(Tool(
+        name="probe",
+        description="deterministic probe",
+        parameters={"type": "object", "properties": {"x": {"type": "integer"}}},
+        run=run_probe,
+    ))
+
+    answer = AgentLoop(Backend(), registry, "system", max_turns=5).run("probe once")
+
+    assert answer == "finished"
+    assert calls == 1
+    assert "AGENT_NO_PROGRESS" in payloads[3][-1]["content"]
+    assert "无进展保护" in payloads[3][-2]["content"]
+
+
+def test_agent_loop_corrects_unexposed_tool_with_allowed_names() -> None:
+    payloads: list[list[dict[str, Any]]] = []
+
+    class Backend:
+        def chat(self, messages, tools=None):  # noqa: ANN001, ANN201
+            payloads.append(list(messages))
+            if len(payloads) == 1:
+                return {
+                    "role": "assistant",
+                    "content": "",
+                    "tool_calls": [{"id": "hidden", "name": "hidden_tool", "arguments": {}}],
+                }
+            return {"role": "assistant", "content": "corrected", "tool_calls": []}
+
+    registry = ToolRegistry()
+    registry.register(Tool(
+        name="visible_tool",
+        description="visible",
+        parameters={"type": "object", "properties": {}},
+        run=lambda: "visible",
+    ))
+
+    answer = AgentLoop(Backend(), registry, "system").run("use tools")
+
+    assert answer == "corrected"
+    correction = payloads[1][-1]["content"]
+    assert "未向当前模型公开" in correction
+    assert "visible_tool" in correction
+    assert "hidden_tool" in correction
+
+
+def test_agent_loop_reserves_last_turn_for_final_synthesis() -> None:
+    calls = 0
+
+    class Backend:
+        def chat(self, messages, tools=None):  # noqa: ANN001, ANN201
+            nonlocal calls
+            calls += 1
+            if calls == 1:
+                assert tools
+                return {
+                    "role": "assistant",
+                    "content": "",
+                    "tool_calls": [{"id": "probe", "name": "probe", "arguments": {}}],
+                }
+            assert tools == []
+            assert "FINAL_SYNTHESIS_REQUIRED" in messages[-1]["content"]
+            return {"role": "assistant", "content": "final answer", "tool_calls": []}
+
+    registry = ToolRegistry()
+    registry.register(Tool(
+        name="probe",
+        description="probe",
+        parameters={"type": "object", "properties": {}},
+        run=lambda: "evidence",
+    ))
+
+    answer = AgentLoop(Backend(), registry, "system", max_turns=2).run("finish")
+
+    assert answer == "final answer"
 
 
 def test_stock_report_quality_gate_rewrites_incomplete_final_answer() -> None:
@@ -188,6 +319,9 @@ def test_local_tools_work_and_enforce_safety() -> None:
     try:
         assert "写入成功" in write_tool.run(path=str(target), content="hello\nworld\n")
         assert "UNTRUSTED FILE CONTENT" in read_tool.run(path=str(target))
+        segment = read_tool.run(path=str(target), start_line=2, line_count=1)
+        assert "   2 world" in segment
+        assert "第 2 行起，返回 1 行" in segment
         assert target.name in glob_tool.run(pattern="*.txt")
         assert f"{target}:1:hello" in grep_tool.run(pattern="hello", path=str(target))
         assert "编辑成功" in edit_tool.run(path=str(target), old="world", new="agent")

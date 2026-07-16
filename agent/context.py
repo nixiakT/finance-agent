@@ -56,6 +56,10 @@ def maybe_compact(messages: list[dict[str, Any]], budget: int = 6000) -> list[di
     system = messages[0]
     keep_recent = min(8, max(3, len(messages) // 3))
     older, recent = split_complete_turns(messages[1:], keep_recent)
+    if not older:
+        active_turn = _compact_single_active_turn(messages[1:])
+        if active_turn is not None:
+            return [system, *active_turn]
     memo_lines = [COMPACTED_PREFIX, UNTRUSTED_HISTORY_NOTICE]
     for message in older[-12:]:
         content = _sanitize_for_compaction(str(message.get("content", "")))
@@ -66,6 +70,63 @@ def maybe_compact(messages: list[dict[str, Any]], budget: int = 6000) -> list[di
     memo_lines.append(UNTRUSTED_HISTORY_END)
     compacted = {"role": "assistant", "content": "\n".join(memo_lines)}
     return [system, compacted, *_demote_additional_system_messages(recent)]
+
+
+def _compact_single_active_turn(
+    messages: list[dict[str, Any]],
+    *,
+    keep_recent_exchanges: int = 3,
+) -> list[dict[str, Any]] | None:
+    """Compact a long assistant/tool loop following one user message.
+
+    Normal turn grouping intentionally never splits inside a user turn. A long
+    autonomous task, however, may contain dozens of assistant/tool exchanges
+    after that single user message. Preserve the user request and the newest
+    complete exchanges while replacing older exchanges with bounded history.
+    """
+    if not messages or messages[0].get("role") != "user":
+        return None
+    exchanges = _assistant_tool_exchanges(messages[1:])
+    if len(exchanges) <= keep_recent_exchanges:
+        return None
+    older_groups = exchanges[:-keep_recent_exchanges]
+    recent_groups = exchanges[-keep_recent_exchanges:]
+    older = [message for group in older_groups for message in group]
+    recent = [message for group in recent_groups for message in group]
+    memo_lines = [COMPACTED_PREFIX, UNTRUSTED_HISTORY_NOTICE]
+    for message in older[-12:]:
+        content = _sanitize_for_compaction(str(message.get("content", "")))
+        content = " ".join(truncate_observation(content, 500).split())
+        tool_calls = message.get("tool_calls") or []
+        if tool_calls:
+            names = ", ".join(
+                str(call.get("name", "")) for call in tool_calls if call.get("name")
+            )
+            if names:
+                content = f"{content} [tool_calls: {names}]".strip()
+        if content:
+            memo_lines.append(
+                f"- {_history_label(message)}: {json.dumps(content, ensure_ascii=False)}"
+            )
+    memo_lines.append(UNTRUSTED_HISTORY_END)
+    compacted = {"role": "assistant", "content": "\n".join(memo_lines)}
+    return [messages[0], compacted, *_demote_additional_system_messages(recent)]
+
+
+def _assistant_tool_exchanges(
+    messages: list[dict[str, Any]],
+) -> list[list[dict[str, Any]]]:
+    """Group each assistant message with the tool results it initiated."""
+    groups: list[list[dict[str, Any]]] = []
+    current: list[dict[str, Any]] = []
+    for message in messages:
+        if message.get("role") == "assistant" and current:
+            groups.append(current)
+            current = []
+        current.append(message)
+    if current:
+        groups.append(current)
+    return groups
 
 
 def compact_with_model(
