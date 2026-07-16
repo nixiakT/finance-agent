@@ -206,6 +206,11 @@ class AgentLoop:
                     return best_report_answer
                 return answer
 
+            if todo_open and not pending_planned_tools:
+                candidate = str(assistant.get("content") or "").strip()
+                if candidate:
+                    deferred_answer = candidate
+
             turn_made_progress = False
             for call in tool_calls:
                 name = call["name"]

@@ -423,6 +423,50 @@ def test_agent_loop_returns_deferred_answer_after_todo_is_cleared(
     assert backend.calls == 3
 
 
+def test_agent_loop_keeps_answer_emitted_with_final_todo_call(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import tools.more_tools as more_tools
+
+    monkeypatch.setattr(more_tools, "_task_store", lambda: tmp_path / "todo.jsonl")
+
+    class Backend:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def chat(self, messages, tools=None):  # noqa: ANN001, ANN201
+            self.calls += 1
+            if self.calls == 1:
+                return {
+                    "role": "assistant",
+                    "content": "",
+                    "tool_calls": [{
+                        "id": "plan",
+                        "name": "task_list",
+                        "arguments": {"action": "add", "items": [{"id": "1", "desc": "report"}]},
+                    }],
+                }
+            return {
+                "role": "assistant",
+                "content": "complete report emitted beside tool call",
+                "tool_calls": [{
+                    "id": "complete",
+                    "name": "task_list",
+                    "arguments": {"action": "complete", "items": ["1"]},
+                }],
+            }
+
+    registry = ToolRegistry()
+    registry.register(task_list_tool)
+    backend = Backend()
+
+    answer = AgentLoop(backend, registry, "system", max_turns=4).run("long task")
+
+    assert answer == "complete report emitted beside tool call"
+    assert backend.calls == 2
+
+
 def test_stock_report_quality_gate_rewrites_incomplete_final_answer() -> None:
     complete_report = "\n".join([
         "# 股票研究报告",
