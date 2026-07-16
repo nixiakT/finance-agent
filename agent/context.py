@@ -61,6 +61,7 @@ def maybe_compact(messages: list[dict[str, Any]], budget: int = 6000) -> list[di
         if active_turn is not None:
             return [system, *active_turn]
     memo_lines = [COMPACTED_PREFIX, UNTRUSTED_HISTORY_NOTICE]
+    memo_lines.extend(_tool_evidence_ledger(older))
     for message in older[-12:]:
         content = _sanitize_for_compaction(str(message.get("content", "")))
         content = truncate_observation(content, 500)
@@ -94,6 +95,7 @@ def _compact_single_active_turn(
     older = [message for group in older_groups for message in group]
     recent = [message for group in recent_groups for message in group]
     memo_lines = [COMPACTED_PREFIX, UNTRUSTED_HISTORY_NOTICE]
+    memo_lines.extend(_tool_evidence_ledger(older))
     for message in older[-12:]:
         content = _sanitize_for_compaction(str(message.get("content", "")))
         content = " ".join(truncate_observation(content, 500).split())
@@ -127,6 +129,37 @@ def _assistant_tool_exchanges(
     if current:
         groups.append(current)
     return groups
+
+
+def _tool_evidence_ledger(
+    messages: list[dict[str, Any]],
+    *,
+    limit: int = 24,
+) -> list[str]:
+    """Keep compact provenance for old tool calls even when observations are dropped."""
+    rows: list[str] = []
+    seen: set[str] = set()
+    for message in messages:
+        for call in message.get("tool_calls") or []:
+            name = str(call.get("name") or "").strip()
+            if not name:
+                continue
+            arguments = call.get("arguments") or {}
+            try:
+                encoded = json.dumps(arguments, ensure_ascii=False, sort_keys=True)
+            except (TypeError, ValueError):
+                encoded = repr(arguments)
+            encoded = truncate_observation(_sanitize_for_compaction(encoded), 320)
+            row = f"- tool evidence requested: {name}({encoded})"
+            if row in seen:
+                continue
+            seen.add(row)
+            rows.append(row)
+            if len(rows) >= limit:
+                break
+        if len(rows) >= limit:
+            break
+    return rows
 
 
 def compact_with_model(

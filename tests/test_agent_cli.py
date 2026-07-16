@@ -46,12 +46,16 @@ def test_maybe_compact_handles_one_long_assistant_tool_loop() -> None:
         {"role": "system", "content": "system"},
         {"role": "user", "content": "one long autonomous task"},
     ]
-    for index in range(7):
+    for index in range(12):
         messages.extend([
             {
                 "role": "assistant",
                 "content": "",
-                "tool_calls": [{"id": f"call-{index}", "name": "read", "arguments": {}}],
+                "tool_calls": [{
+                    "id": f"call-{index}",
+                    "name": "read",
+                    "arguments": {"path": "mcp/client.py" if index == 0 else f"file-{index}.py"},
+                }],
             },
             {
                 "role": "tool",
@@ -67,6 +71,7 @@ def test_maybe_compact_handles_one_long_assistant_tool_loop() -> None:
     assert compacted[1] == messages[1]
     assert compacted[2]["role"] == "assistant"
     assert "Earlier conversation was compacted" in compacted[2]["content"]
+    assert "mcp/client.py" in compacted[2]["content"]
     assert len(compacted) < len(messages)
     recent = compacted[3:]
     assert [message["role"] for message in recent] == ["assistant", "tool"] * 3
