@@ -334,6 +334,21 @@ def test_prediction_scorecard_accepts_one_receipt_per_requested_symbol() -> None
     assert answer == "done"
 
 
+def test_negated_prediction_recording_request_does_not_add_scorecard_notice() -> None:
+    loop = AgentLoop(
+        CapturingBackend(summary="unused", answer="只读验收完成，未下单。"),
+        ToolRegistry(),
+        SYSTEM_PROMPT,
+    )
+
+    answer = loop.run(
+        "按本金 100000 元计算仓位；全程禁止写入记忆或预测账本。"
+    )
+
+    assert answer == "只读验收完成，未下单。"
+    assert "预测记录边界" not in answer
+
+
 def test_explicit_paper_trade_does_not_get_real_order_notice() -> None:
     loop = AgentLoop(CapturingBackend(summary="unused", answer="已记录纸面持仓"), ToolRegistry(), SYSTEM_PROMPT)
 

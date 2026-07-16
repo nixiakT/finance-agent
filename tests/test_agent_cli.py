@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -14,7 +15,7 @@ from finance.data import ProviderError
 from finance.evolution import add_memory, extract_learning, list_memories
 from tools.base import Tool, ToolRegistry
 from tools.fs import read_tool, write_tool
-from tools.more_tools import edit_tool, glob_tool, grep_tool
+from tools.more_tools import _task_list, edit_tool, glob_tool, grep_tool, task_list_tool
 from tools.security import SecurityError
 from tools.shell import bash_tool
 from tools.web_tools import web_fetch_tool, web_search_tool
@@ -207,6 +208,101 @@ def test_agent_loop_reserves_last_turn_for_final_synthesis() -> None:
     answer = AgentLoop(Backend(), registry, "system", max_turns=2).run("finish")
 
     assert answer == "final answer"
+
+
+def test_task_list_update_merges_and_complete_empties_store(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import tools.more_tools as more_tools
+
+    store = tmp_path / "todo.jsonl"
+    monkeypatch.setattr(more_tools, "_task_store", lambda: store)
+
+    _task_list("add", [{"id": "1", "desc": "first"}, {"id": "2", "desc": "second"}])
+    updated = _task_list("update", [{"id": "1", "desc": "first", "status": "completed"}])
+
+    assert "1: first" in updated
+    assert "2: second" in updated
+    assert _task_list("complete", [{"id": "1"}]).count("second") == 1
+    assert "计划已全部完成" in _task_list("complete", ["2"])
+    assert store.read_text(encoding="utf-8") == ""
+
+
+def test_agent_loop_checkpoints_todo_and_prioritizes_planned_tool(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import tools.more_tools as more_tools
+
+    monkeypatch.setattr(more_tools, "_task_store", lambda: tmp_path / "todo.jsonl")
+
+    class Backend:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def chat(self, messages, tools=None):  # noqa: ANN001, ANN201
+            self.calls += 1
+            names = {(schema.get("function") or {}).get("name") for schema in (tools or [])}
+            if self.calls == 1:
+                return {
+                    "role": "assistant",
+                    "content": "",
+                    "tool_calls": [{
+                        "id": "plan",
+                        "name": "task_list",
+                        "arguments": {"action": "add", "items": [
+                            {"id": "1", "desc": "call planned_probe"},
+                            {"id": "2", "desc": "write final answer"},
+                        ]},
+                    }],
+                }
+            if 2 <= self.calls <= 5:
+                return {
+                    "role": "assistant",
+                    "content": "",
+                    "tool_calls": [{
+                        "id": f"search-{self.calls}",
+                        "name": "search_probe",
+                        "arguments": {"query": self.calls},
+                    }],
+                }
+            if self.calls == 6:
+                assert names == {"task_list", "planned_probe"}
+                assert "PLAN_PROGRESS_CHECKPOINT" in messages[-1]["content"]
+                return {
+                    "role": "assistant",
+                    "content": "",
+                    "tool_calls": [
+                        {"id": "planned", "name": "planned_probe", "arguments": {}},
+                        {
+                            "id": "finish-plan",
+                            "name": "task_list",
+                            "arguments": {"action": "complete", "items": ["1", "2"]},
+                        },
+                    ],
+                }
+            return {"role": "assistant", "content": "finished", "tool_calls": []}
+
+    registry = ToolRegistry()
+    registry.register(task_list_tool)
+    registry.register(Tool(
+        "search_probe",
+        "search",
+        {"type": "object", "properties": {"query": {"type": "integer"}}},
+        lambda query: f"result {query}",
+    ))
+    registry.register(Tool(
+        "planned_probe",
+        "planned deterministic tool",
+        {"type": "object", "properties": {}},
+        lambda: "planned result",
+    ))
+
+    answer = AgentLoop(Backend(), registry, "system", max_turns=8).run("long task")
+
+    assert answer == "finished"
+    assert (tmp_path / "todo.jsonl").read_text(encoding="utf-8") == ""
 
 
 def test_stock_report_quality_gate_rewrites_incomplete_final_answer() -> None:

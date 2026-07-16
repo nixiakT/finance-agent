@@ -96,11 +96,31 @@ class AgentLoop:
         seen_calls: set[str] = set()
         no_progress_rounds = 0
         final_synthesis_requested = False
+        todo_seen = False
+        todo_open = False
+        turns_since_todo = 0
+        planned_tool_names: set[str] = set()
+        completed_tool_names: set[str] = set()
         for turn in range(self.max_turns):
             compacted = maybe_compact(messages, self.context_budget)
             if compacted is not messages:
                 messages[:] = compacted
                 self._emit("context_compacted", {"messages": len(messages)})
+            pending_planned_tools = planned_tool_names - completed_tool_names
+            progress_checkpoint = (
+                todo_open
+                and turns_since_todo >= 4
+                and not synthesis_only
+            )
+            if progress_checkpoint:
+                messages.append({
+                    "role": "user",
+                    "content": _progress_checkpoint_prompt(pending_planned_tools),
+                })
+                self._emit("progress_checkpoint", {
+                    "pending_planned_tools": sorted(pending_planned_tools),
+                    "turns_since_todo": turns_since_todo,
+                })
             if (
                 turn == self.max_turns - 1
                 and tool_receipts
@@ -117,6 +137,12 @@ class AgentLoop:
                 for schema in self.registry.schemas()
                 if _tool_schema_name(schema) not in self.model_tool_exclusions
             ]
+            if progress_checkpoint:
+                checkpoint_tools = {"task_list", *pending_planned_tools}
+                schemas = [
+                    schema for schema in schemas
+                    if _tool_schema_name(schema) in checkpoint_tools
+                ]
             allowed_tool_names = {_tool_schema_name(schema) for schema in schemas}
             try:
                 assistant = self.backend.chat(messages, tools=schemas)
@@ -138,6 +164,13 @@ class AgentLoop:
 
             tool_calls = assistant.get("tool_calls") or []
             if not tool_calls:
+                if todo_open and turn + 1 < self.max_turns:
+                    messages.append({
+                        "role": "user",
+                        "content": _progress_checkpoint_prompt(pending_planned_tools),
+                    })
+                    turns_since_todo = 4
+                    continue
                 answer = _enforce_task_boundaries(
                     user_task,
                     assistant.get("content", ""),
@@ -246,6 +279,21 @@ class AgentLoop:
                     call_cache[fingerprint] = (receipt_output, obs, succeeded)
                 if name in allowed_tool_names and not repeated_call:
                     turn_made_progress = True
+                if succeeded:
+                    completed_tool_names.add(name)
+                if name == "task_list" and succeeded:
+                    todo_seen = True
+                    turns_since_todo = 0
+                    action = str(arguments.get("action") or "").lower().strip()
+                    if action in {"add", "set", "update"}:
+                        todo_open = True
+                        planned_tool_names.update(
+                            _planned_tool_names(arguments.get("items"), self.registry.names())
+                        )
+                    elif action in {"clear", "reset"}:
+                        todo_open = False
+                    elif action in {"complete", "done"}:
+                        todo_open = "计划已全部完成" not in receipt_output
                 tool_receipts.append({
                     "name": name,
                     "arguments": arguments,
@@ -254,6 +302,9 @@ class AgentLoop:
                 })
                 messages.append({"role": "tool", "name": name,
                                  "tool_call_id": call.get("id"), "content": obs})
+
+            if todo_seen and not any(call.get("name") == "task_list" for call in tool_calls):
+                turns_since_todo += 1
 
             if turn_made_progress:
                 no_progress_rounds = 0
@@ -362,6 +413,22 @@ def _final_synthesis_prompt() -> str:
         "final answer now. State any unresolved item honestly, include required code paths and "
         "safety boundaries, and do not request or describe another tool call."
     )
+
+
+def _progress_checkpoint_prompt(pending_tools: set[str]) -> str:
+    pending = ", ".join(sorted(pending_tools)) or "无"
+    return (
+        "[PLAN_PROGRESS_CHECKPOINT] Stop broad searching and reconcile the Todo plan now. "
+        "Call task_list with action=complete for every finished item, using its id. "
+        f"Planned tools not yet successfully executed: {pending}. "
+        "If any are listed, execute them now before more source exploration. "
+        "Do not produce the final answer until the Todo list is empty."
+    )
+
+
+def _planned_tool_names(items: object, available_names: Iterable[str]) -> set[str]:
+    text = json.dumps(items, ensure_ascii=False) if items is not None else ""
+    return {name for name in available_names if name and name in text}
 
 
 def _stock_report_quality_issues(user_task: str, answer: str) -> list[str]:
@@ -581,6 +648,13 @@ def _is_wechat_notification_request(task: str) -> bool:
 
 def _requested_prediction_symbols(task: str) -> list[tuple[str, str]]:
     compact = "".join(str(task).lower().split())
+    negated_recording = (
+        r"(?:禁止|不得|不要|不允许|无需).{0,24}(?:预测|评分表|账本)",
+        r"(?:禁止|不得|不要|不允许|无需).{0,24}(?:记录|写入|保存)",
+        r"(?:do\s*not|don't|never).{0,32}(?:record|prediction|scorecard|ledger)",
+    )
+    if any(re.search(pattern, compact) for pattern in negated_recording):
+        return []
     record_cues = ("记录", "记到", "写入", "保存", "评分表", "record", "scorecard")
     prediction_cues = ("预测", "涨跌", "方向", "看涨", "看跌", "把握", "置信", "prediction")
     if not any(token in compact for token in record_cues) or not any(

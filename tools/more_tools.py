@@ -5,7 +5,9 @@
 """
 from __future__ import annotations
 
+import ast
 import fnmatch
+import json
 import subprocess
 from pathlib import Path
 
@@ -82,20 +84,34 @@ def _task_list(action: str, items: list | None = None) -> str:
     if normalized in {"clear", "reset"}:
         store.write_text("", encoding="utf-8")
         return "任务清单已清空。"
-    if normalized in {"add", "set", "update"}:
+    if normalized in {"add", "set"}:
         if not items:
             raise ValueError("items 不能为空")
-        current = [str(item) for item in items]
-        store.write_text("\n".join(current), encoding="utf-8")
-        return "任务清单已更新：\n" + "\n".join(f"- {item}" for item in current)
+        current = [_normalize_task(item, index) for index, item in enumerate(items, start=1)]
+        _save_tasks(store, current)
+        return _render_tasks("任务清单已建立", current)
+    if normalized == "update":
+        if not items:
+            raise ValueError("items 不能为空")
+        by_id = {item["id"]: item for item in current}
+        for index, raw in enumerate(items, start=1):
+            incoming = _normalize_task(raw, index)
+            previous = by_id.get(incoming["id"], {})
+            by_id[incoming["id"]] = {**previous, **incoming}
+        current = list(by_id.values())
+        _save_tasks(store, current)
+        return _render_tasks("任务清单已更新", current)
     if normalized in {"complete", "done"}:
         if items:
-            done = {str(item) for item in items}
-            current = [item for item in current if item not in done]
-            store.write_text("\n".join(current), encoding="utf-8")
-        return "剩余任务：\n" + ("\n".join(f"- {item}" for item in current) if current else "无")
+            done = {_task_identity(item) for item in items}
+            current = [
+                item for item in current
+                if item["id"] not in done and item["desc"] not in done
+            ]
+            _save_tasks(store, current)
+        return _render_tasks("剩余任务", current)
     if normalized in {"list", "show"}:
-        return "当前任务：\n" + ("\n".join(f"- {item}" for item in current) if current else "无")
+        return _render_tasks("当前任务", current)
     raise ValueError("action 必须是 add/update/complete/list/clear")
 
 
@@ -113,9 +129,18 @@ glob_tool = Tool("glob", "按通配模式查找文件路径。",
 web_fetch_tool = Tool("web_fetch", "抓取 URL 并转为 markdown（受 token 预算限制）。",
                       {"type": "object", "properties": {"url": {"type": "string"}},
                        "required": ["url"]}, _web_fetch)
-task_list_tool = Tool("task_list", "维护任务待办清单（add/update/complete）。",
+task_list_tool = Tool("task_list", "维护任务待办清单。add/set 建立完整计划；update 按 id 合并状态，不会覆盖其他项；每完成一步用 complete/done 删除对应 id，结束前必须让剩余任务为空。",
                       {"type": "object", "properties": {"action": {"type": "string"},
-                       "items": {"type": "array"}}, "required": ["action"]}, _task_list)
+                       "items": {"type": "array", "items": {
+                           "oneOf": [
+                               {"type": "string"},
+                               {"type": "object", "properties": {
+                                   "id": {"type": "string"},
+                                   "desc": {"type": "string"},
+                                   "status": {"type": "string"},
+                               }},
+                           ],
+                       }}}, "required": ["action"]}, _task_list)
 
 
 def _guard_directory(path: str) -> Path:
@@ -157,10 +182,57 @@ def _task_store() -> Path:
     return path
 
 
-def _load_tasks(path: Path) -> list[str]:
+def _load_tasks(path: Path) -> list[dict[str, str]]:
     if not path.exists():
         return []
-    return [line.strip() for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
+    tasks: list[dict[str, str]] = []
+    for index, line in enumerate(path.read_text(encoding="utf-8").splitlines(), start=1):
+        if not line.strip():
+            continue
+        try:
+            raw = json.loads(line)
+        except json.JSONDecodeError:
+            try:
+                raw = ast.literal_eval(line)
+            except (SyntaxError, ValueError):
+                raw = line
+        tasks.append(_normalize_task(raw, index))
+    return tasks
+
+
+def _save_tasks(path: Path, tasks: list[dict[str, str]]) -> None:
+    path.write_text(
+        "\n".join(json.dumps(item, ensure_ascii=False, sort_keys=True) for item in tasks),
+        encoding="utf-8",
+    )
+
+
+def _normalize_task(raw: object, index: int) -> dict[str, str]:
+    if isinstance(raw, dict):
+        task_id = str(raw.get("id") or index).strip()
+        desc = str(raw.get("desc") or raw.get("task") or raw.get("title") or task_id).strip()
+        status = str(raw.get("status") or "pending").strip().lower()
+    else:
+        task_id = str(index)
+        desc = str(raw).strip()
+        status = "pending"
+    return {"id": task_id, "desc": desc, "status": status}
+
+
+def _task_identity(raw: object) -> str:
+    if isinstance(raw, dict):
+        return str(raw.get("id") or raw.get("desc") or raw).strip()
+    return str(raw).strip()
+
+
+def _render_tasks(title: str, tasks: list[dict[str, str]]) -> str:
+    if not tasks:
+        return f"{title}：\n无（计划已全部完成）"
+    rows = [
+        f"- [{item['status']}] {item['id']}: {item['desc']}"
+        for item in tasks
+    ]
+    return f"{title}：\n" + "\n".join(rows) + "\n完成后请用 action=complete 按 id 删除对应项。"
 
 
 def _truncate(text: str, limit: int = 12_000) -> str:
