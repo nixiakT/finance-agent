@@ -5,10 +5,12 @@ import os
 from pathlib import Path
 from typing import Any
 
+from tools.security import SecurityError, guard_shell
 
-READONLY = {"read", "grep", "glob", "read_skill", "task_list", "web_search"}
+
+READONLY = {"read", "grep", "glob", "read_skill", "web_search"}
 WRITE = {"write", "edit", "trace2skill_generate"}
-FIXED_SAFE_WRITES = {"remember", "memory_set", "memory_forget"}
+FIXED_SAFE_WRITES = {"remember", "memory_set", "memory_forget", "task_list"}
 SAFE_MCP_TOOLS = {"mcp__finance__risk_budget"}
 EXEC = {"bash", "web_fetch"}
 AUTO_FINANCE_PREFIXES = (
@@ -33,7 +35,15 @@ def check(tool: str, args: dict[str, Any], workdir: Path) -> str:
         path = _write_path_for(tool, args)
         if path is None:
             return "confirm"
-        return "confirm" if _inside(path, workdir) else "deny"
+        return "allow" if _inside(path, workdir) else "deny"
+    if tool == "bash":
+        try:
+            parts = guard_shell(str(args.get("command") or ""))
+        except SecurityError:
+            return "deny"
+        if _runs_python_code(parts):
+            return "confirm"
+        return "allow"
     if tool in EXEC or tool.startswith("mcp__"):
         return "confirm"
     return "confirm"
@@ -48,6 +58,17 @@ def denial_message(tool: str, args: dict[str, Any], workdir: Path) -> str:
 
 def confirmation_message(tool: str, args: dict[str, Any]) -> str:
     return f"[权限层] 需确认：{tool}({args}) —— 已拦截（演示默认不放行）。"
+
+
+def can_auto_approve(tool: str, args: dict[str, Any]) -> bool:
+    """Limit the CLI convenience switch to reviewed local Python entry points."""
+    if tool != "bash":
+        return False
+    try:
+        parts = guard_shell(str(args.get("command") or ""))
+    except SecurityError:
+        return False
+    return _runs_python_code(parts)
 
 
 def _write_path_for(tool: str, args: dict[str, Any]) -> Path | None:
@@ -77,3 +98,9 @@ def _wechat_delivery_is_local() -> bool:
         os.environ.get("FINANCE_WECHAT_WEBHOOK", "").strip()
         or os.environ.get("FINANCE_WECHAT_RELAY_URL", "").strip()
     )
+
+
+def _runs_python_code(parts: list[str]) -> bool:
+    if len(parts) < 2 or Path(parts[0]).name not in {"python", "python3"}:
+        return False
+    return parts[1] not in {"--version", "-V"}

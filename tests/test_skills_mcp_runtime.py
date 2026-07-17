@@ -8,7 +8,13 @@ from pathlib import Path
 
 import pytest
 
-from mcp.client import MCPClient, connect_project_mcp, register_mcp_tools
+from mcp.client import (
+    MCPClient,
+    _mcp_process_env,
+    _mcp_trust_token,
+    connect_project_mcp,
+    register_mcp_tools,
+)
 from skills.loader import SkillFormatError, SkillNotFoundError, load_skills, read_skill
 from tools.base import ToolRegistry
 from tools.skill_tools import read_skill_tool
@@ -89,6 +95,26 @@ def _write_server(tmp_path: Path) -> Path:
     return path
 
 
+def _trust_project_config(
+    monkeypatch: pytest.MonkeyPatch,
+    config: Path,
+) -> None:
+    raw = json.loads(config.read_text(encoding="utf-8"))
+    tokens: list[str] = []
+    for name, spec in raw["mcpServers"].items():
+        cwd = Path(spec.get("cwd") or config.parent)
+        if not cwd.is_absolute():
+            cwd = config.parent / cwd
+        tokens.append(_mcp_trust_token(
+            name,
+            [spec["command"], *spec.get("args", [])],
+            spec.get("env", {}),
+            cwd.resolve(),
+            float(spec.get("timeoutSeconds", 10)),
+        ))
+    monkeypatch.setenv("MINI_OPENCLAW_TRUSTED_MCP_SERVERS", ",".join(tokens))
+
+
 def test_skills_are_sorted_by_declared_name_and_read_by_name(tmp_path: Path) -> None:
     root = tmp_path / "skills"
     _write_skill(root, "first-folder", "zeta-skill", "# Zeta body")
@@ -133,7 +159,10 @@ def test_read_skill_tool_is_read_only_and_returns_the_body(
     assert list(root.rglob("*")) == [root / "demo", root / "demo" / "SKILL.md"]
 
 
-def test_project_mcp_config_registers_multiple_namespaced_servers(tmp_path: Path) -> None:
+def test_project_mcp_config_registers_multiple_namespaced_servers(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     server = _write_server(tmp_path)
     config = tmp_path / ".mcp.json"
     config.write_text(json.dumps({
@@ -142,6 +171,7 @@ def test_project_mcp_config_registers_multiple_namespaced_servers(tmp_path: Path
             "alpha": {"command": sys.executable, "args": [str(server), "alpha"]},
         }
     }), encoding="utf-8")
+    _trust_project_config(monkeypatch, config)
     registry = ToolRegistry()
 
     runtime = connect_project_mcp(registry, config)
@@ -170,7 +200,78 @@ def test_project_mcp_config_registers_multiple_namespaced_servers(tmp_path: Path
         runtime.close()
 
 
-def test_one_broken_mcp_server_does_not_hide_healthy_servers(tmp_path: Path) -> None:
+def test_untrusted_project_mcp_server_is_not_started(tmp_path: Path) -> None:
+    marker = tmp_path / "started.txt"
+    server = tmp_path / "untrusted_server.py"
+    server.write_text(
+        f"from pathlib import Path\nPath({str(marker)!r}).write_text('started')\n",
+        encoding="utf-8",
+    )
+    config = tmp_path / ".mcp.json"
+    config.write_text(json.dumps({
+        "mcpServers": {
+            "untrusted": {"command": sys.executable, "args": [str(server)]},
+        }
+    }), encoding="utf-8")
+    registry = ToolRegistry()
+
+    runtime = connect_project_mcp(registry, config)
+    try:
+        statuses = {row["name"]: row for row in runtime.statuses()}
+        assert statuses["untrusted"]["status"] == "error"
+        assert "not a trusted built-in" in statuses["untrusted"]["detail"]
+        assert not marker.exists()
+    finally:
+        runtime.close()
+
+
+def test_builtin_mcp_name_cannot_be_spoofed_from_nested_cwd(tmp_path: Path) -> None:
+    nested = tmp_path / "nested"
+    package = nested / "mcp"
+    package.mkdir(parents=True)
+    (package / "__init__.py").write_text("", encoding="utf-8")
+    marker = tmp_path / "spoofed.txt"
+    (package / "echo_server.py").write_text(
+        f"from pathlib import Path\nPath({str(marker)!r}).write_text('started')\n",
+        encoding="utf-8",
+    )
+    config = tmp_path / ".mcp.json"
+    config.write_text(json.dumps({
+        "mcpServers": {
+            "echo": {
+                "command": "python",
+                "args": ["-m", "mcp.echo_server"],
+                "cwd": "nested",
+            },
+        }
+    }), encoding="utf-8")
+    registry = ToolRegistry()
+
+    runtime = connect_project_mcp(registry, config)
+    try:
+        assert runtime.statuses()[0]["status"] == "error"
+        assert not marker.exists()
+    finally:
+        runtime.close()
+
+
+def test_mcp_process_environment_does_not_inherit_parent_secrets(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "parent-secret-must-not-leak")
+    monkeypatch.setenv("PATH", "/test/bin")
+
+    inherited = _mcp_process_env({"MCP_EXPLICIT": "allowed"})
+
+    assert inherited["PATH"] == "/test/bin"
+    assert inherited["MCP_EXPLICIT"] == "allowed"
+    assert "DEEPSEEK_API_KEY" not in inherited
+
+
+def test_one_broken_mcp_server_does_not_hide_healthy_servers(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     server = _write_server(tmp_path)
     config = tmp_path / ".mcp.json"
     config.write_text(json.dumps({
@@ -179,6 +280,7 @@ def test_one_broken_mcp_server_does_not_hide_healthy_servers(tmp_path: Path) -> 
             "healthy": {"command": sys.executable, "args": [str(server), "healthy"]},
         }
     }), encoding="utf-8")
+    _trust_project_config(monkeypatch, config)
     registry = ToolRegistry()
 
     runtime = connect_project_mcp(registry, config)
@@ -219,7 +321,10 @@ def test_mcp_server_without_prompts_remains_connected(tmp_path: Path) -> None:
         runtime.close()
 
 
-def test_registry_closes_all_mcp_processes(tmp_path: Path) -> None:
+def test_registry_closes_all_mcp_processes(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     server = _write_server(tmp_path)
     config = tmp_path / ".mcp.json"
     config.write_text(json.dumps({
@@ -228,6 +333,7 @@ def test_registry_closes_all_mcp_processes(tmp_path: Path) -> None:
             "beta": {"command": sys.executable, "args": [str(server), "beta"]},
         }
     }), encoding="utf-8")
+    _trust_project_config(monkeypatch, config)
     registry = ToolRegistry()
     runtime = connect_project_mcp(registry, config)
     processes = [client.proc for client in runtime.clients]
@@ -284,7 +390,10 @@ def test_mcp_normalized_tool_collision_registers_nothing() -> None:
     assert registry.names() == []
 
 
-def test_prompt_discovery_timeout_does_not_leave_dead_tools(tmp_path: Path) -> None:
+def test_prompt_discovery_timeout_does_not_leave_dead_tools(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     server = tmp_path / "slow_prompt_server.py"
     server.write_text(textwrap.dedent(
         """
@@ -322,6 +431,7 @@ def test_prompt_discovery_timeout_does_not_leave_dead_tools(tmp_path: Path) -> N
             }
         }
     }), encoding="utf-8")
+    _trust_project_config(monkeypatch, config)
     registry = ToolRegistry()
 
     runtime = connect_project_mcp(registry, config)

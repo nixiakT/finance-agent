@@ -27,7 +27,8 @@ from finance.quality import render_quality_screen
 from finance.report import render_stock_report
 from finance.resolver import resolve_symbol
 from finance.symbols import extract_symbols, normalize_symbol, to_yahoo_symbol
-from finance.web import web_search
+from finance.web import web_fetch, web_search
+from tools.security import SecurityError
 
 
 def test_symbol_normalization_handles_common_markets() -> None:
@@ -549,6 +550,31 @@ def test_web_search_returns_finance_fallback_on_request_error(monkeypatch: pytes
     assert "搜索入口连接失败" in output
     assert "本地财经链接 fallback" in output
     assert "https://xueqiu.com/S/02513" in output
+
+
+def test_web_fetch_revalidates_every_redirect_target(monkeypatch: pytest.MonkeyPatch) -> None:
+    import httpx
+    import finance.web as web_module
+
+    class RedirectClient:
+        def __enter__(self):  # noqa: ANN204
+            return self
+
+        def __exit__(self, *args: object) -> None:
+            return None
+
+        def get(self, url: str, **kwargs: object) -> httpx.Response:
+            request = httpx.Request("GET", url)
+            return httpx.Response(
+                302,
+                headers={"location": "http://127.0.0.1/private"},
+                request=request,
+            )
+
+    monkeypatch.setattr(web_module, "http_client", lambda **kwargs: RedirectClient())
+
+    with pytest.raises(SecurityError, match="白名单"):
+        web_fetch("https://example.com/redirect")
 
 
 def test_parse_strategy_and_backtest_return_metrics() -> None:

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import hashlib
 import os
 import queue
 import re
@@ -20,6 +21,13 @@ from tools.base import Tool, ToolRegistry
 DEFAULT_TIMEOUT = 10.0
 MCP_NAME_RE = re.compile(r"^[A-Za-z0-9_-]+$")
 MCP_ARGUMENT_NAME_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_-]{0,63}$")
+BUILTIN_PROJECT_MCP_MODULES = {"mcp.echo_server", "mcp.finance_server"}
+TRUSTED_PROJECT_MCP_ENV = "MINI_OPENCLAW_TRUSTED_MCP_SERVERS"
+MCP_INHERITED_ENV = {
+    "PATH", "HOME", "LANG", "LC_ALL", "LC_CTYPE", "TMPDIR", "TEMP", "TMP",
+    "SYSTEMROOT", "WINDIR", "PATHEXT", "VIRTUAL_ENV", "CONDA_PREFIX",
+    "PYTHONUNBUFFERED",
+}
 _EOF = object()
 
 
@@ -78,8 +86,7 @@ class MCPClient:
         self.capabilities = {}
         self._stdout_queue = queue.Queue()
         self._stderr_lines.clear()
-        process_env = os.environ.copy()
-        process_env.update(self.env)
+        process_env = _mcp_process_env(self.env)
         try:
             self.proc = subprocess.Popen(
                 self.command,
@@ -438,6 +445,16 @@ def default_echo_client() -> MCPClient:
     )
 
 
+def _mcp_process_env(explicit: dict[str, str] | None = None) -> dict[str, str]:
+    process_env = {
+        key: value
+        for key, value in os.environ.items()
+        if key in MCP_INHERITED_ENV
+    }
+    process_env.update(explicit or {})
+    return process_env
+
+
 def _load_project_clients(
     path: Path,
 ) -> tuple[list[MCPClient], list[dict[str, str]]]:
@@ -450,15 +467,33 @@ def _load_project_clients(
 
     clients: list[MCPClient] = []
     errors: list[dict[str, str]] = []
+    trust_tokens = {
+        token.strip()
+        for token in os.environ.get(TRUSTED_PROJECT_MCP_ENV, "").split(",")
+        if token.strip()
+    }
     for name, spec in sorted(raw["mcpServers"].items()):
         try:
-            clients.append(_client_from_spec(name, spec, path.parent))
+            clients.append(
+                _client_from_spec(
+                    name,
+                    spec,
+                    path.parent,
+                    trust_tokens=trust_tokens,
+                )
+            )
         except Exception as exc:
             errors.append({"name": str(name), "status": "error", "detail": str(exc)})
     return clients, errors
 
 
-def _client_from_spec(name: Any, spec: Any, root: Path) -> MCPClient:
+def _client_from_spec(
+    name: Any,
+    spec: Any,
+    root: Path,
+    *,
+    trust_tokens: set[str] | None = None,
+) -> MCPClient:
     if not isinstance(name, str):
         raise MCPConfigError("MCP server name must be a string")
     _validate_mcp_name(name, "server")
@@ -491,6 +526,22 @@ def _client_from_spec(name: Any, spec: Any, root: Path) -> MCPClient:
         resolved_cwd = Path(cwd)
         if not resolved_cwd.is_absolute():
             resolved_cwd = root / resolved_cwd
+        resolved_cwd = resolved_cwd.resolve()
+    builtin = _is_builtin_project_server(command, args, env, resolved_cwd, root)
+    trust_token = _mcp_trust_token(
+        name,
+        [command, *args],
+        env,
+        resolved_cwd or root.resolve(),
+        float(timeout),
+    )
+    if not builtin and trust_token not in (trust_tokens or set()):
+        raise MCPConfigError(
+            f"MCP server '{name}' is not a trusted built-in; review it, then add its name to "
+            f"{TRUSTED_PROJECT_MCP_ENV} as {trust_token} before startup"
+        )
+    if builtin:
+        command = sys.executable
     return MCPClient(
         [command, *args],
         name=name,
@@ -498,6 +549,47 @@ def _client_from_spec(name: Any, spec: Any, root: Path) -> MCPClient:
         cwd=resolved_cwd,
         timeout=float(timeout),
     )
+
+
+def _is_builtin_project_server(
+    command: str,
+    args: list[str],
+    env: dict[str, str],
+    cwd: Path | None,
+    root: Path,
+) -> bool:
+    if Path(command).name not in {"python", "python3", Path(sys.executable).name}:
+        return False
+    if len(args) != 2 or args[0] != "-m" or args[1] not in BUILTIN_PROJECT_MCP_MODULES:
+        return False
+    if env:
+        return False
+    effective_cwd = (cwd or root).resolve()
+    if effective_cwd != root.resolve():
+        return False
+    return True
+
+
+def _mcp_trust_token(
+    name: str,
+    command: list[str],
+    env: dict[str, str],
+    cwd: Path,
+    timeout: float,
+) -> str:
+    payload = json.dumps(
+        {
+            "name": name,
+            "command": command,
+            "env": env,
+            "cwd": str(cwd.resolve()),
+            "timeout": timeout,
+        },
+        ensure_ascii=True,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    return f"{name}@sha256:{hashlib.sha256(payload).hexdigest()}"
 
 
 def _discover_prompts(client: MCPClient) -> list[dict[str, Any]]:

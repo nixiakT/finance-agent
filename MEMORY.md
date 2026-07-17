@@ -15,5 +15,5 @@
 ## 常用命令
 
 - 自检：`python -m agent.cli --selfcheck`
-- 测试：`conda run -n openclaw python -m pytest -q`
+- 测试：`python -m pytest -q`
 - 交互入口：`python -m agent.cli`

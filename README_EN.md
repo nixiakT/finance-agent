@@ -9,7 +9,7 @@ Command-line stock research assistant for quotes, fundamentals, news verificatio
 - Quotes: price, change, volume, market cap, data source, and timestamp.
 - Symbol resolution: company names, Chinese names, English names, aliases, or tickers to A-share, Hong Kong, and US candidates.
 - History and indicators: MA5 / MA20 / MA60, RSI14, MACD, volatility, 1-month / 3-month / 1-year returns.
-- Fundamentals: real-source lookup through Tushare, AKShare, Yahoo, and optional providers for PE, EPS, revenue, profit, cash flow, ROE, and margin. Empty results fall through to the next provider; unresolved gaps stay explicit.
+- Fundamentals: concurrent lookup across applicable real providers such as Tushare, AKShare, and Yahoo. Existing primary-source values are retained, missing PE, EPS, revenue, profit, cash flow, ROE, and margin fields are supplemented under field-specific compatibility rules, and unresolved gaps stay explicit.
 - News and web verification: news is filtered by ticker/company-specific terms. An upstream failure is reported as a data failure, never converted into a fake news item.
 - Structured reports: price, trend, fundamentals, technicals, news, risks, and research conclusion.
 - Research quality gate: information richness, data gaps, reject/recheck signals, and next verification steps.
@@ -30,15 +30,18 @@ Command-line stock research assistant for quotes, fundamentals, news verificatio
 
 ## Quick Start
 
-The repository includes `environment.yml`. Create or update the `openclaw` environment:
+From the repository root, create an isolated Python 3.11 environment. No pre-existing conda environment is assumed:
 
 ```bash
-conda env create -f environment.yml        # first setup
-# conda env update -n openclaw -f environment.yml --prune  # existing environment
-conda activate openclaw
+cd /path/to/mini-openclaw
+python3.11 -m venv .venv
+source .venv/bin/activate
+python -m pip install -r requirements.txt
 python -m agent.cli --selfcheck
 python -m agent.cli
 ```
+
+Replace `/path/to/mini-openclaw` with the actual clone. `environment.yml` remains available for users who prefer conda, but the demo and reproduction commands do not depend on a fixed environment name.
 
 Interactive mode keeps one persistent session:
 
@@ -144,6 +147,14 @@ Configure multiple stdio servers in the project-root `.mcp.json`:
 
 One broken server does not hide healthy servers. `/mcp` reports each server's status, errors, tools, and prompts. Managed MCP subprocesses close when an interactive or one-shot run exits. If `.mcp.json` is absent, the built-in echo server remains available as a local example.
 
+The bundled `mcp.echo_server` and `mcp.finance_server` start automatically only when command, module, empty `env`, and project-root `cwd` all match. Other project MCP entries remain blocked and report a trust token bound to `name + command + args + env + cwd + timeout`. After reviewing the configuration and server source, set it for one command:
+
+```bash
+MINI_OPENCLAW_TRUSTED_MCP_SERVERS='<name>@sha256:<digest>' python -m agent.cli --selfcheck
+```
+
+Changing any configuration field invalidates the token. This variable permits server startup only; tool calls still pass through `MINI_OPENCLAW_APPROVED_TOOLS` and the runtime permission layer.
+
 ## Proxy And Language
 
 For Clash/Mihomo, configure the local mixed proxy in `.env.local`:
@@ -214,7 +225,7 @@ Useful commands:
 
 Finance self-evolution writes preferences, corrections, data-source lessons, and risk rules to `.finance_agent/finance_memory.jsonl`. The core `skills/finance-research-evolution/SKILL.md` remains stable; use the lower-level `finance_evolve_from_trace` with a separate `skill_name` only when a new dedicated skill is needed. Local memory is gitignored, and skill writes sanitize common keys, tokens, and cookies.
 
-The prediction scoring loop writes calls to `.finance_agent/predictions.jsonl`, including baseline price, horizon, confidence, and thesis. `/predict eval` fetches the later price and computes directional hit, realized return, and confidence-weighted score. `/predict eval all` is useful for demos. `/predict learn` reviews direction buckets, accuracy, confidence errors, and high-confidence misses. `/predict learn save` stores the review in finance memory.
+The prediction scoring loop writes calls to `~/.finance-agent/predictions.jsonl` by default; set `FINANCE_PREDICTION_PATH` to choose another location. On first use of the new default, the legacy `.finance_agent/predictions.jsonl` file is migrated. Records include baseline price, horizon, confidence, and thesis. `/predict eval` fetches the later price and computes directional hit, realized return, and confidence-weighted score. `/predict eval all` is useful for demos. `/predict learn` reviews direction buckets, accuracy, confidence errors, and high-confidence misses. `/predict learn save` stores the review in finance memory.
 
 Historical learning turns historical candles into walk-forward samples and checks how the current feature buckets performed in the past. `/learn-history AAPL 2y 20` outputs direction, confidence, sample count, and matched features, appends the result to `.finance_agent/history_learning.jsonl`, updates `skills/finance-history-learning/SKILL.md`, and records a forecast for future scoring.
 
@@ -278,7 +289,7 @@ FINANCE_ALLOW_SAMPLE_FALLBACK=1
 
 Applicable real providers run concurrently under one deadline per operation and one total snapshot deadline. Timed-out providers are reported and temporarily circuit-broken instead of blocking successful fallbacks. Configure `FINANCE_PROVIDER_TIMEOUT_SECONDS`, `FINANCE_SNAPSHOT_TIMEOUT_SECONDS`, and `FINANCE_PROVIDER_COOLDOWN_SECONDS`; defaults are 25, 45, and 60 seconds.
 
-Quote lookup checks every applicable real provider, prefers the freshest real-time result, and reports the maximum price spread. Historical candles also query every applicable real provider using unadjusted closes, select the freshest/most complete series, and report overlap-window spread. Fundamentals fill missing fields only when currency, report date, and period basis are compatible, and report overlapping-field differences. News aggregates all applicable real providers, filters relevance, deduplicates across sources, and diversifies sources before applying the limit; only events from the last 180 days count as recent quality coverage. AKShare maps public financial indicators for A-share, Hong Kong, and US symbols. Sample fallback never counts as real-source coverage or cross-validation.
+Quote lookup checks every applicable real provider, prefers the freshest real-time result, and reports the maximum price spread. Historical candles also query every applicable real provider using unadjusted closes, select the freshest/most complete series, and report overlap-window spread. Fundamentals retain existing primary-source values and only fill gaps. Compatibility is field-specific: monetary fields such as market cap check currency; period fields such as EPS, revenue, profit, and cash flow check currency, report date, and period type; ROE, leverage, and margin check the report period. Cross-provider PE and forward-PE gap filling currently does not apply those checks and is a documented boundary. Deriving PE from price and EPS is stricter: symbol and currency must match, EPS must be positive, and the TTM/annual report must be no more than 550 days old. Overlapping differences are recorded without replacing existing primary values. News aggregates all applicable real providers, filters relevance, deduplicates across sources, and diversifies sources before applying the limit; only events from the last 180 days count as recent quality coverage. AKShare maps public financial indicators for A-share, Hong Kong, and US symbols. Sample fallback never counts as real-source coverage or cross-validation.
 
 Yahoo news first requests a larger candidate set, then filters on the ticker, provider query code, and distinctive company-name terms. Generic words such as `technology`, `group`, and `inc` cannot cause a match by themselves. No strong match is reported as empty/filtered; transport or provider failures are reported separately.
 
@@ -304,6 +315,8 @@ python -m agent.cli "Analyze recent SpaceX developments"
 - When a page has WAF or JavaScript challenges, the tool reports the limitation instead of pretending to read the full content.
 - Repeating "this stock will rise," asking to omit risks, or claiming insider information adds no evidence and does not raise confidence.
 - A deterministic finance fallback produced after a first-turn model failure is recorded in the same interactive session, so follow-ups such as "what about it?" retain context. Compacted history is low-trust data and is never promoted to a system instruction.
+- `MINI_OPENCLAW_AUTO_APPROVE=1` only approves reviewed local Python entry points: workspace `.py` scripts and the allowlisted `pytest` / `compileall` modules. In-workspace `write/edit` calls and non-script allowlisted commands follow the permission table directly. The switch does not approve `web_fetch`, external MCP tools, or real WeChat delivery, and it leaves pre-execution workspace, sensitive-path, secret-write, and shell checks enabled. Approved Python still runs with the local process permissions, so enable it only after reviewing the code.
+- Use comma-separated `MINI_OPENCLAW_APPROVED_TOOLS` for a specific reviewed tool, for example `MINI_OPENCLAW_APPROVED_TOOLS=mcp__echo__echo`. It cannot bypass a hard deny. Leave both variables unset for routine demos.
 
 ## License
 
@@ -323,8 +336,8 @@ FINANCE_ALLOW_SAMPLE_FALLBACK=0 python -m agent.cli /compare AAPL 600519.SS 0700
 FINANCE_RUN_LIVE_EVAL=1 python -m pytest tests/test_live_injection_eval.py -q
 ```
 
-Regular `pytest` skips the live model evaluation. It runs only when `FINANCE_RUN_LIVE_EVAL=1` is set explicitly.
+Regular `pytest` skips the live model evaluation. It runs only when `FINANCE_RUN_LIVE_EVAL=1` is set explicitly. Test counts change with the source; use the final summary from `python -m pytest -q` instead of a number copied into documentation.
 
-Technical design: [docs/TECHNICAL_DESIGN.md](docs/TECHNICAL_DESIGN.md). Ablation report: [docs/ABLATION_REPORT.md](docs/ABLATION_REPORT.md).
+Formal deliverables are in the sibling report repository: [technical report](../ppt-and-report/reports/technical_report.pdf) and [ablation report](../ppt-and-report/reports/ablation_report.pdf). The in-repository [technical design](docs/TECHNICAL_DESIGN.md) and [early ablation notes](docs/ABLATION_REPORT.md) are implementation supplements.
 
 Progress and historical decisions: [FINANCE_AGENT_PROGRESS.md](FINANCE_AGENT_PROGRESS.md).

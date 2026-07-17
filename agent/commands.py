@@ -9,6 +9,8 @@ from pathlib import Path
 from typing import Callable
 from urllib.parse import urlsplit
 
+from agent import permissions
+from agent.context import redact_sensitive_text
 from finance.agent import FinanceResearchAgent
 from finance.data import ProviderError
 from finance.evolution import add_memory, extract_learning, render_memories
@@ -24,13 +26,13 @@ from finance.predictions import (
     render_scorecard,
     select_due_close,
 )
-from finance.web import web_fetch, web_search
 from agent.memory import Memory
 from agent.ui import current_lang
 from skills.loader import load_skills
 from scheduler.jobs import add_job, list_jobs, render_jobs, run_due_jobs
-from tools.security import guard_write, safety_summary
+from tools.security import SecurityError, guard_write, safety_summary
 from tools.base import ToolRegistry
+from tools.web_tools import web_fetch_tool, web_search_tool
 from wechat import connector_status, send_markdown, send_text
 
 
@@ -116,12 +118,12 @@ class CommandRouter:
         if command == "/search":
             try:
                 return CommandResult(True, self._search(args))
-            except ValueError as exc:
+            except (SecurityError, ValueError) as exc:
                 return CommandResult(True, str(exc))
         if command == "/fetch":
             try:
                 return CommandResult(True, self._fetch(args))
-            except ValueError as exc:
+            except (SecurityError, ValueError) as exc:
                 return CommandResult(True, str(exc))
 
         finance_commands = {
@@ -381,27 +383,34 @@ class CommandRouter:
             self._trace_tool("wechat_status", {})
             return self._with_result_trace("wechat_status", connector_status())
         action = args[0].lower()
-        if action == "send":
-            content = " ".join(args[1:]).strip()
+        if action in {"send", "send-md"}:
+            confirmed = len(args) > 1 and args[1].lower() == "--confirm"
+            content = " ".join(args[2:] if confirmed else args[1:]).strip()
             if not content:
                 return _msg(
-                    "Usage: /wechat send <message>",
-                    "用法：/wechat send <要发送的内容>",
+                    f"Usage: /wechat {action} [--confirm] <message>",
+                    f"用法：/wechat {action} [--confirm] <内容>",
                 )
-            self._trace_tool("wechat_send", {"msgtype": "text", "content": content})
-            return self._with_result_trace("wechat_send", send_text(content).render())
-        if action == "send-md":
-            content = " ".join(args[1:]).strip()
-            if not content:
-                return _msg(
-                    "Usage: /wechat send-md <markdown>",
-                    "用法：/wechat send-md <markdown 内容>",
+            self._trace_tool("wechat_status", {})
+            status = self._with_result_trace("wechat_status", connector_status())
+            verdict = permissions.check("wechat_send", {"content": content}, Path.cwd())
+            if verdict == "deny":
+                return status + "\n" + permissions.denial_message(
+                    "wechat_send", {"content": "[redacted]"}, Path.cwd()
                 )
-            self._trace_tool("wechat_send", {"msgtype": "markdown", "content": content})
-            return self._with_result_trace("wechat_send", send_markdown(content).render())
+            if verdict == "confirm" and not confirmed:
+                return "\n".join([
+                    status,
+                    "[权限层] 当前连接会产生真实外传，尚未发送。",
+                    f"确认目标无误后，重新执行 /wechat {action} --confirm <内容>。",
+                ])
+            msgtype = "markdown" if action == "send-md" else "text"
+            self._trace_tool("wechat_send", {"msgtype": msgtype, "content": "[redacted]"})
+            result = send_markdown(content) if action == "send-md" else send_text(content)
+            return status + "\n" + self._with_result_trace("wechat_send", result.render())
         return _msg(
-            "Usage: /wechat status | /wechat send <message> | /wechat send-md <markdown>",
-            "用法：/wechat status | /wechat send <内容> | /wechat send-md <markdown>",
+            "Usage: /wechat status | /wechat send [--confirm] <message> | /wechat send-md [--confirm] <markdown>",
+            "用法：/wechat status | /wechat send [--confirm] <内容> | /wechat send-md [--confirm] <markdown>",
         )
 
     def _memory(self, args: list[str]) -> str:
@@ -681,12 +690,12 @@ class CommandRouter:
         if not query:
             raise ValueError("用法：/search 智谱 02513 股票")
         self._trace_tool("web_search", {"query": query, "limit": 5})
-        return self._with_result_trace("web_search", web_search(query, 5))
+        return self._with_result_trace("web_search", web_search_tool.run(query=query, limit=5))
 
     def _fetch(self, args: list[str]) -> str:
         url = _require_arg(args, "/fetch https://xueqiu.com/S/02513")
         self._trace_tool("web_fetch", {"url": url})
-        return self._with_result_trace("web_fetch", web_fetch(url))
+        return self._with_result_trace("web_fetch", web_fetch_tool.run(url=url))
 
     def _think(self, args: list[str], think_enabled: str | bool) -> CommandResult:
         if not args:
@@ -764,7 +773,7 @@ def _period_arg(value: str) -> str:
 
 
 def _preview(text: str, limit: int = 180) -> str:
-    clean = " ".join(str(text).split())
+    clean = " ".join(redact_sensitive_text(str(text)).split())
     if len(clean) <= limit:
         return clean
     return clean[:limit] + "..."
@@ -772,9 +781,10 @@ def _preview(text: str, limit: int = 180) -> str:
 
 def _json_preview(value: object) -> str:
     try:
-        return json.dumps(value, ensure_ascii=False, default=str, separators=(",", ":"))
+        raw = json.dumps(value, ensure_ascii=False, default=str, separators=(",", ":"))
     except TypeError:
-        return str(value)
+        raw = str(value)
+    return redact_sensitive_text(raw)
 
 
 def _safe_base_url(value: str) -> str:

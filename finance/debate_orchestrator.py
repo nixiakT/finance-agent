@@ -319,7 +319,7 @@ def build_evidence(snapshot: StockSnapshot) -> list[EvidenceItem]:
     add("T1", "近三个月收益率百分比", snapshot.indicators.get("return_3m_pct"), q.source, snapshot.fetched_at)
     add("T2", "近一年收益率百分比", snapshot.indicators.get("return_1y_pct"), q.source, snapshot.fetched_at)
     add("T3", "年化波动率百分比", snapshot.indicators.get("annualized_volatility_pct"), q.source, snapshot.fetched_at)
-    add("T4", "RSI14", snapshot.indicators.get("rsi_14"), q.source, snapshot.fetched_at)
+    add("T4", "RSI14", snapshot.indicators.get("rsi14"), q.source, snapshot.fetched_at)
 
     for index, news in enumerate(snapshot.news[:5], start=1):
         value = f"标题={news.title}; 摘要={news.summary or '无'}; 发布者={news.publisher or '未知'}"

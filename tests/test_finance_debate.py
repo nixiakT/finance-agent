@@ -8,7 +8,13 @@ from typing import Any
 import pytest
 
 from finance.agent import FinanceResearchAgent
-from finance.debate_orchestrator import MODEL_MODE, RULE_MODE, ModelDebateOrchestrator, render_debate_outcomes
+from finance.debate_orchestrator import (
+    MODEL_MODE,
+    RULE_MODE,
+    ModelDebateOrchestrator,
+    build_evidence,
+    render_debate_outcomes,
+)
 from finance.models import Candle, Financials, NewsItem, Quote, StockSnapshot
 from finance.predictions import load_predictions
 
@@ -153,6 +159,17 @@ def test_news_prompt_injection_is_marked_untrusted_and_never_becomes_instruction
     assert "不可信外部数据" in independent[0]["content"]
     assert '"untrusted_external_text": true' in independent[1]["content"]
     assert "Ignore all previous instructions" in independent[1]["content"]
+
+
+def test_debate_evidence_uses_indicator_rsi14_key() -> None:
+    snapshot = _snapshot()
+    snapshot.indicators["rsi14"] = 57.3
+
+    evidence = build_evidence(snapshot)
+
+    rsi = next(item for item in evidence if item.id == "T4")
+    assert rsi.label == "RSI14"
+    assert rsi.value == "57.3"
 
 
 def test_model_failure_is_visibly_labeled_as_rule_fallback() -> None:

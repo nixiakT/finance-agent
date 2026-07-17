@@ -5,18 +5,21 @@ import html
 import json
 import re
 from typing import Any
-from urllib.parse import parse_qs, unquote, urlparse
+from urllib.parse import parse_qs, unquote, urljoin, urlparse
 
 import httpx
 
 from .http import client as http_client
 from .symbols import extract_symbols, normalize_symbol, to_yahoo_symbol
+from tools.security import guard_outbound_text, guard_web_fetch
 
 
 USER_AGENT = (
     "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
     "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/138.0.0.0 Safari/537.36"
 )
+REDIRECT_STATUS_CODES = {301, 302, 303, 307, 308}
+MAX_REDIRECTS = 5
 
 
 def web_search(query: str, limit: int = 5) -> str:
@@ -24,6 +27,7 @@ def web_search(query: str, limit: int = 5) -> str:
     cleaned = query.strip()
     if not cleaned:
         raise ValueError("query is required")
+    guard_outbound_text(cleaned, label="搜索词")
 
     search_url = ""
     search_error = ""
@@ -77,8 +81,8 @@ def web_fetch(url: str, max_chars: int = 4000) -> str:
         raise ValueError("只支持 http/https URL")
 
     try:
-        with http_client(timeout=20.0, follow_redirects=True, headers=_headers()) as client:
-            response = client.get(cleaned)
+        with http_client(timeout=20.0, follow_redirects=False, headers=_headers()) as client:
+            response = _guarded_web_get(client, cleaned)
     except httpx.RequestError as exc:
         return "\n".join([
             f"URL: {cleaned}",
@@ -116,6 +120,24 @@ def web_fetch(url: str, max_chars: int = 4000) -> str:
         lines.append("内容摘要:")
         lines.append(excerpt)
     return "\n".join(lines)
+
+
+def _guarded_web_get(client: httpx.Client, url: str) -> httpx.Response:
+    current = url
+    for _ in range(MAX_REDIRECTS + 1):
+        guard_web_fetch(current)
+        response = client.get(current, follow_redirects=False)
+        if response.status_code not in REDIRECT_STATUS_CODES:
+            guard_web_fetch(str(response.url))
+            return response
+        location = response.headers.get("location", "").strip()
+        if not location:
+            raise httpx.HTTPError(f"redirect response missing Location: {current}")
+        current = urljoin(current, location)
+    raise httpx.TooManyRedirects(
+        f"web_fetch exceeded {MAX_REDIRECTS} redirects",
+        request=httpx.Request("GET", current),
+    )
 
 
 def _headers() -> dict[str, str]:

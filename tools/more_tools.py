@@ -12,7 +12,7 @@ import subprocess
 from pathlib import Path
 
 from .base import Tool
-from .security import WORKSPACE_ROOT, guard_read, guard_write
+from .security import SecurityError, WORKSPACE_ROOT, guard_read, guard_write, resolve_workspace_path
 
 
 # --- edit：三种策略权衡（整文件重写 / unified diff / search-replace）---
@@ -37,7 +37,14 @@ def _grep(pattern: str, path: str = ".") -> str:
     resolved = guard_read(path) if Path(path).expanduser().is_file() else _guard_directory(path)
     try:
         result = subprocess.run(
-            ["rg", "--line-number", "--with-filename", "--no-heading", "--color", "never", pattern, str(resolved)],
+            [
+                "rg", "--line-number", "--with-filename", "--no-heading", "--color", "never",
+                "--iglob", "!**/.env*", "--iglob", "!**/.git/**", "--iglob", "!**/.ssh/**",
+                "--iglob", "!**/.aws/**", "--iglob", "!**/.config/**", "--iglob", "!**/.docker/**",
+                "--iglob", "!**/.claude/**", "--iglob", "!**/.npmrc", "--iglob", "!**/.pypirc",
+                "--iglob", "!**/.netrc", "--iglob", "!**/credentials", "--iglob", "!**/id_rsa",
+                "--iglob", "!**/id_ed25519", "-e", pattern, "--", str(resolved),
+            ],
             cwd=WORKSPACE_ROOT,
             text=True,
             capture_output=True,
@@ -57,7 +64,11 @@ def _grep(pattern: str, path: str = ".") -> str:
 def _glob(pattern: str, limit: int = 200) -> str:
     matches: list[str] = []
     for path in WORKSPACE_ROOT.rglob("*"):
-        if any(part in {".git", "__pycache__", ".pytest_cache"} for part in path.parts):
+        if any(part in {"__pycache__", ".pytest_cache"} for part in path.parts):
+            continue
+        try:
+            resolve_workspace_path(str(path), must_exist=True)
+        except (FileNotFoundError, SecurityError):
             continue
         rel = path.relative_to(WORKSPACE_ROOT).as_posix()
         if fnmatch.fnmatch(rel, pattern) or fnmatch.fnmatch(path.name, pattern):
@@ -145,11 +156,7 @@ task_list_tool = Tool("task_list", "维护任务待办清单。add/set 建立完
 
 
 def _guard_directory(path: str) -> Path:
-    candidate = Path(path).expanduser()
-    if not candidate.is_absolute():
-        candidate = WORKSPACE_ROOT / candidate
-    resolved = candidate.resolve()
-    resolved.relative_to(WORKSPACE_ROOT)
+    resolved = resolve_workspace_path(path, must_exist=True)
     if not resolved.is_dir():
         raise FileNotFoundError(f"目录不存在: {path}")
     return resolved
@@ -162,7 +169,11 @@ def _grep_python(pattern: str, path: Path) -> str:
     rows: list[str] = []
     files = [path] if path.is_file() else [p for p in path.rglob("*") if p.is_file()]
     for file_path in files:
-        if any(part in {".git", "__pycache__", ".pytest_cache"} for part in file_path.parts):
+        if any(part in {"__pycache__", ".pytest_cache"} for part in file_path.parts):
+            continue
+        try:
+            resolve_workspace_path(str(file_path), must_exist=True)
+        except (FileNotFoundError, SecurityError):
             continue
         try:
             lines = file_path.read_text(encoding="utf-8", errors="replace").splitlines()

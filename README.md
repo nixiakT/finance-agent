@@ -9,7 +9,7 @@ Language / 语言: 中文 | [English](README_EN.md)
 - 股票行情：价格、涨跌、成交量、市值、数据源和时间。
 - 标的解析：公司名、简称、中文名、英文名或 ticker 自动解析为 A 股/港股/美股候选代码。
 - 历史价格与技术指标：MA5 / MA20 / MA60、RSI14、MACD、波动率、近 1 月 / 3 月 / 1 年收益率。
-- 基本面：从 Tushare、AKShare 和 Yahoo 等真实来源查询 PE、EPS、营收、利润、现金流、ROE 和利润率；空数据会继续切换来源，最终缺失则明确标注。
+- 基本面：并发查询 Tushare、AKShare 和 Yahoo 等适用真实来源，保留优先源已有值，再按字段兼容规则补齐 PE、EPS、营收、利润、现金流、ROE 和利润率；最终缺失会明确标注。
 - 新闻和网页核验：新闻按 ticker/公司名关键词过滤；接口失败只会记为数据失败，不会伪装成一条“新闻”。
 - 结构化报告：价格、走势、基本面、技术面、新闻、风险和研究结论。
 - 研究质量门禁：信息丰富度 A/B/C、数据缺口、快速否决/重审信号、下一步核验。
@@ -32,15 +32,18 @@ Language / 语言: 中文 | [English](README_EN.md)
 
 ## 快速开始
 
-仓库提供 `environment.yml`。首次创建或已有环境更新：
+从仓库根目录使用 Python 3.11 创建独立环境；不要求机器上预先存在某个 conda 环境：
 
 ```bash
-conda env create -f environment.yml        # 首次创建
-# conda env update -n openclaw -f environment.yml --prune  # 已存在时更新
-conda activate openclaw
+cd /path/to/mini-openclaw
+python3.11 -m venv .venv
+source .venv/bin/activate
+python -m pip install -r requirements.txt
 python -m agent.cli --selfcheck
 python -m agent.cli
 ```
+
+`/path/to/mini-openclaw` 替换为实际克隆目录。仓库也保留 `environment.yml` 供需要 conda 的用户自行创建环境，但演示和复现命令不依赖固定环境名。
 
 进入交互模式后可以持续对话：
 
@@ -156,6 +159,14 @@ python -c "from tools.base import build_default_registry; r=build_default_regist
 
 某个 server 启动失败不会隐藏其他正常 server；`/mcp` 会显示每个 server 的状态、错误、工具和 prompt。交互会话或单次任务退出时会关闭所有受管 MCP 子进程。如果项目没有 `.mcp.json`，则保留内置 echo server 作为本地示例。
 
+项目内置的 `mcp.echo_server` / `mcp.finance_server` 只有在命令、模块、空 `env` 和项目根 `cwd` 全部匹配时才会自动启动。其他项目 MCP 默认显示为 blocked，错误详情会给出绑定 `name + command + args + env + cwd + timeout` 的 trust token。审查配置和 server 源码后，只为当前命令临时设置：
+
+```bash
+MINI_OPENCLAW_TRUSTED_MCP_SERVERS='<name>@sha256:<digest>' python -m agent.cli --selfcheck
+```
+
+配置任一字段变化后旧 token 自动失效。这个变量只允许 server 启动；实际调用仍受 `MINI_OPENCLAW_APPROVED_TOOLS` 和权限层约束。
+
 ## 代理与语言
 
 如果本机使用 Clash/Mihomo，截图里的混合代理端口是 `7897`，可以在 `.env.local` 中配置：
@@ -225,7 +236,7 @@ FINANCE_PORTFOLIO_DIR=~/.finance-agent/portfolios
 
 金融自进化会把偏好、纠错、数据源经验和风险规则写入 `.finance_agent/finance_memory.jsonl`。核心 `skills/finance-research-evolution/SKILL.md` 保持稳定；如果确实需要生成新的专用 Skill，可以通过底层 `finance_evolve_from_trace` 指定独立 `skill_name`。本地 memory 目录已被 git 忽略；写入 Skill 前会脱敏常见 key/token/cookie。
 
-预测评分闭环会把每次方向判断保存到 `.finance_agent/predictions.jsonl`，包含 baseline 价格、期限、信号证据类型和 thesis。系统使用过去数据生成时间有序、互不重叠的 walk-forward 样本；只有同方向样本至少 30 个时，才输出 Beta 平滑的历史校准命中率、样本数和 95% 区间。样本不足、模型或用户输入的数值只显示为“信号强度，非统计概率”。到期后运行 `/predict eval`，系统使用到期日或之后首个交易日收盘价计算方向命中和实际收益。`/predict eval all` 仅用于 Demo 立即评分未到期预测；`/predict learn` 生成事后复盘。
+预测评分闭环默认把每次方向判断保存到 `~/.finance-agent/predictions.jsonl`，也可用 `FINANCE_PREDICTION_PATH` 指定其他位置；首次使用新默认路径时会迁移旧的 `.finance_agent/predictions.jsonl`。记录包含 baseline 价格、期限、信号证据类型和 thesis。系统使用过去数据生成时间有序、互不重叠的 walk-forward 样本；只有同方向样本至少 30 个时，才输出 Beta 平滑的历史校准命中率、样本数和 95% 区间。样本不足、模型或用户输入的数值只显示为“信号强度，非统计概率”。到期后运行 `/predict eval`，系统使用到期日或之后首个交易日收盘价计算方向命中和实际收益。`/predict eval all` 仅用于 Demo 立即评分未到期预测；`/predict learn` 生成事后复盘。
 
 历史学习预测会把历史 K 线切成 walk-forward 样本，学习当前特征桶在历史上对应的未来收益和胜率。`/learn-history AAPL 2y 20` 会输出方向、启发式信号强度、样本数和匹配特征，把结果写入 `.finance_agent/history_learning.jsonl`，同时更新 `skills/finance-history-learning/SKILL.md` 并记录一条可到期评分的预测。
 
@@ -291,7 +302,7 @@ FINANCE_ALLOW_SAMPLE_FALLBACK=1
 
 真实数据结果使用进程内 TTL 缓存，默认行情 60 秒、历史价格 900 秒、基本面 21600 秒、新闻 600 秒。可分别通过 `FINANCE_QUOTE_CACHE_TTL_SECONDS`、`FINANCE_HISTORY_CACHE_TTL_SECONDS`、`FINANCE_FINANCIALS_CACHE_TTL_SECONDS` 和 `FINANCE_NEWS_CACHE_TTL_SECONDS` 调整；设为 `0` 可关闭对应缓存。缓存命中状态和缓存年龄会写入来源覆盖信息。
 
-行情查询所有适用真实源，优先选择更新且实时的结果，并记录最大价差。历史 K 线同样查询全部适用真实源，统一使用未复权收盘价，选择更新/更完整的序列，并报告重叠日期价差。基本面查询全部适用真实源，只在币种、报告期和期间口径兼容时补齐字段，并报告重叠字段差异。新闻聚合全部适用真实源，做相关性过滤、跨源去重和来源多样化后再截取数量；质量评级只把近 180 天事件算作近期覆盖。AKShare 基本面适配 A 股、港股和美股公开财务指标；样例 fallback 不会被计入真实来源或交叉验证。
+行情查询所有适用真实源，优先选择更新且实时的结果，并记录最大价差。历史 K 线同样查询全部适用真实源，统一使用未复权收盘价，选择更新/更完整的序列，并报告重叠日期价差。基本面保留优先源已有值，只补空字段，并按字段应用兼容检查：市值等货币字段检查币种，EPS、营收、利润和现金流等期间字段同时检查币种、报告期和期间类型，ROE、杠杆和利润率检查报告期；当前跨源 PE/Forward PE 补值不做这些兼容检查，属于已知边界。由价格和 EPS 推导 PE 时则要求代码、币种一致，EPS 为正，期间为 TTM/年度且报告期不超过 550 天。重叠字段差异只进入来源覆盖，不覆盖优先源已有值。新闻聚合全部适用真实源，做相关性过滤、跨源去重和来源多样化后再截取数量；质量评级只把近 180 天事件算作近期覆盖。AKShare 基本面适配 A 股、港股和美股公开财务指标；样例 fallback 不会被计入真实来源或交叉验证。
 
 Yahoo 新闻会先扩大候选集，再用 ticker、查询代码和公司名中的特异词过滤，会丢弃 `technology`、`group`、`inc` 这类通用词造成的错配。无强相关结果时会明确说明“暂无/被过滤”；接口异常则单独说明失败原因。
 
@@ -349,6 +360,8 @@ Useful commands:
 - 网页抓取遇到 WAF/JS challenge 时只会标注限制，不会假装读取完整正文。
 - 重复说“这只股会涨”、要求忽略风险或声称有内幕都不算新证据，不会因此提高置信度。
 - 首轮模型失败后生成的确定性金融兜底报告会记入同一交互会话，后续“它呢”类问题仍有上下文。压缩后的历史只作为低信任数据，不会被提升成 system 指令。
+- `MINI_OPENCLAW_AUTO_APPROVE=1` 只用于自动批准已经审查过的本地 Python 执行入口，包括工作区 `.py` 脚本以及白名单内的 `pytest` / `compileall` 模块。工作区内的 `write/edit` 和非脚本白名单命令按权限表直接处理，不需要这个开关；`web_fetch`、外部 MCP 和真实微信发送不会因该变量而执行。开关不会关闭工作区、敏感路径、secret 写入和 Shell 白名单等执行前检查，但获批的 Python 代码本身仍具有本机进程权限，因此只能在审查代码后临时开启。
+- 对确实需要单独批准的工具，使用逗号分隔的 `MINI_OPENCLAW_APPROVED_TOOLS`，例如 `MINI_OPENCLAW_APPROVED_TOOLS=mcp__echo__echo`。它只批准列出的工具，不能越过硬拒绝规则；常规演示不设置这两个变量。
 
 ## License
 
@@ -368,8 +381,8 @@ FINANCE_ALLOW_SAMPLE_FALLBACK=0 python -m agent.cli /compare AAPL 600519.SS 0700
 FINANCE_RUN_LIVE_EVAL=1 python -m pytest tests/test_live_injection_eval.py -q
 ```
 
-常规 `pytest` 会跳过需花费模型额度的真实诱导测试；只有显式设置 `FINANCE_RUN_LIVE_EVAL=1` 才会执行。
+常规 `pytest` 会跳过需花费模型额度的真实诱导测试；只有显式设置 `FINANCE_RUN_LIVE_EVAL=1` 才会执行。测试数量会随提交变化，复现时以 `python -m pytest -q` 最后一行的实时汇总为准，文档不硬编码通过数。
 
-Demo Day 请只使用 [docs/DEMO_DAY_SCRIPT.md](docs/DEMO_DAY_SCRIPT.md)，其中包含逐分钟讲稿、现场命令、预期结果、答辩标准答案和失败预案。技术文档见 [docs/TECHNICAL_DESIGN.md](docs/TECHNICAL_DESIGN.md)，消融实验见 [docs/ABLATION_REPORT.md](docs/ABLATION_REPORT.md)。
+Demo Day 请只使用 [docs/DEMO_DAY_SCRIPT.md](docs/DEMO_DAY_SCRIPT.md)，其中包含逐分钟讲稿、现场命令、预期结果、答辩标准答案和失败预案。正式交付见 sibling 报告仓库中的 [技术报告](../ppt-and-report/reports/technical_report.pdf) 和 [消融报告](../ppt-and-report/reports/ablation_report.pdf)；仓库内的 [技术设计](docs/TECHNICAL_DESIGN.md) 与 [早期消融说明](docs/ABLATION_REPORT.md) 仅作实现补充。
 
 项目进度和历史决策见 [FINANCE_AGENT_PROGRESS.md](FINANCE_AGENT_PROGRESS.md)。
